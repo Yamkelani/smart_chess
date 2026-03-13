@@ -1,0 +1,17 @@
+{
+  "name": "3d-chess-frontend",
+  "version": "1.0.0",
+  "description": "3D Chess Game with AI opponent",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

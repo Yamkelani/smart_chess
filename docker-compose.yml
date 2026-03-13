@@ -1,0 +1,41 @@
+services:
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - ENGINE_PORT=8081
+      - RUST_LOG=info
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      - ENGINE_URL=http://engine:8081
+      - AI_SERVICE_PORT=8082
+      - MODEL_DIR=/app/models
+      - TRAINING_DATA_DIR=/app/training_data
+    volumes:
+      - ai-models:/app/models
+      - ai-training:/app/training_data
+    depends_on:
+      - engine
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - engine
+      - ai-service
+
+volumes:
+  ai-models:
+  ai-training:
