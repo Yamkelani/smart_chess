@@ -12,6 +12,10 @@ env/
 dist/
 *.egg-info/
 
+# Tauri generated Android/iOS projects
+frontend/src-tauri/gen/
+frontend/src-tauri/target/
+
 # IDE
 .vscode/
 .idea/

@@ -62,6 +62,22 @@ const THEMES = {
     bg: 0x4a3a30, ground: 0x3a2e24,
     ambientIntensity: 1.0, keyIntensity: 2.0, exposure: 1.8,
   },
+  glass: {
+    name: 'Glass',
+    light: 0xd4eaf7, dark: 0x8aafc4,
+    trim: 0x88ccee, base: 0x1a2a3a,
+    bg: 0x1a2a44, ground: 0x15233a,
+    ambientIntensity: 1.2, keyIntensity: 2.2, exposure: 2.0,
+    squareRoughness: 0.1, squareMetalness: 0.3, squareOpacity: 0.85,
+  },
+  obsidian: {
+    name: 'Obsidian',
+    light: 0x444444, dark: 0x1a1a1a,
+    trim: 0xff4444, base: 0x0a0a0a,
+    bg: 0x0f0f1a, ground: 0x0a0a12,
+    ambientIntensity: 0.8, keyIntensity: 1.6, exposure: 2.1,
+    squareRoughness: 0.05, squareMetalness: 0.7,
+  },
 };
 
 let currentTheme = 'classic';
@@ -74,6 +90,7 @@ const HIGHLIGHT_SELECTED  = 0x00ff88;
 const HIGHLIGHT_LEGAL      = 0x4488ff;
 const HIGHLIGHT_LAST_MOVE  = 0xffd700;
 const HIGHLIGHT_CHECK       = 0xff2244;
+const HIGHLIGHT_HINT        = 0x00e5ff;
 
 export class ChessBoard3D {
   constructor(canvas) {
@@ -107,6 +124,18 @@ export class ChessBoard3D {
     this._boardBase = null;
     this._boardTrim = null;
 
+    // Trajectory trail
+    this._trajectoryTrail = null;
+
+    // Board annotations (arrows/circles from right-click drag)
+    this._annotations = [];
+    this._annotationDragging = false;
+    this._annotationFrom = null;
+
+    // Drag-and-drop state
+    this._liftedPieceSq = null;
+    this._liftedPieceOrigY = 0.04;
+
     this._initScene();
     this._initBoard();
     this._initLights();
@@ -117,6 +146,7 @@ export class ChessBoard3D {
     this._initAmbientParticles();
     this._initConfettiSystem();
     this._initHoverTracking();
+    this._initAnnotationSystem();
     this._startRenderLoop();
   }
 
@@ -459,7 +489,7 @@ export class ChessBoard3D {
     this.particlePool = [];
     const particleGeo = new THREE.SphereGeometry(0.03, 6, 6);
 
-    for (let i = 0; i < 80; i++) {
+    for (let i = 0; i < 150; i++) {
       const mat = new THREE.MeshBasicMaterial({
         color: 0xffffff,
         transparent: true,
@@ -475,32 +505,34 @@ export class ChessBoard3D {
     }
   }
 
-  // ── Ambient floating dust particles ──
+  // ── Ambient floating dust particles + starfield ──
   _initAmbientParticles() {
-    const count = 120;
+    // --- Floating dust ---
+    const count = 200;
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
     this._ambientData = { count, velocities: [] };
 
     for (let i = 0; i < count; i++) {
-      positions[i * 3]     = (Math.random() - 0.5) * 20;
-      positions[i * 3 + 1] = Math.random() * 10 + 0.5;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 20;
+      positions[i * 3]     = (Math.random() - 0.5) * 24;
+      positions[i * 3 + 1] = Math.random() * 12 + 0.5;
+      positions[i * 3 + 2] = (Math.random() - 0.5) * 24;
 
-      // Soft cyan/gold tints
       const tint = Math.random();
-      if (tint < 0.5) {
+      if (tint < 0.4) {
         colors[i * 3] = 0.3; colors[i * 3 + 1] = 0.7; colors[i * 3 + 2] = 1.0;
-      } else {
+      } else if (tint < 0.7) {
         colors[i * 3] = 1.0; colors[i * 3 + 1] = 0.8; colors[i * 3 + 2] = 0.4;
+      } else {
+        colors[i * 3] = 0.8; colors[i * 3 + 1] = 0.5; colors[i * 3 + 2] = 1.0;
       }
 
-      sizes[i] = 0.02 + Math.random() * 0.04;
+      sizes[i] = 0.02 + Math.random() * 0.05;
       this._ambientData.velocities.push({
-        x: (Math.random() - 0.5) * 0.003,
-        y: 0.002 + Math.random() * 0.004,
-        z: (Math.random() - 0.5) * 0.003,
+        x: (Math.random() - 0.5) * 0.004,
+        y: 0.002 + Math.random() * 0.005,
+        z: (Math.random() - 0.5) * 0.004,
         drift: Math.random() * Math.PI * 2,
       });
     }
@@ -511,10 +543,10 @@ export class ChessBoard3D {
     geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
 
     const mat = new THREE.PointsMaterial({
-      size: 0.06,
+      size: 0.07,
       vertexColors: true,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.4,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       sizeAttenuation: true,
@@ -522,6 +554,38 @@ export class ChessBoard3D {
 
     this._ambientPoints = new THREE.Points(geo, mat);
     this.scene.add(this._ambientPoints);
+
+    // --- Starfield background layer ---
+    const starCount = 300;
+    const starPos = new Float32Array(starCount * 3);
+    const starCol = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const r = 30 + Math.random() * 15;
+      starPos[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+      starPos[i * 3 + 1] = Math.abs(r * Math.cos(phi)) * 0.5 + 2;
+      starPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+
+      const brightness = 0.5 + Math.random() * 0.5;
+      starCol[i * 3] = brightness;
+      starCol[i * 3 + 1] = brightness;
+      starCol[i * 3 + 2] = brightness + Math.random() * 0.3;
+    }
+    const starGeo = new THREE.BufferGeometry();
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    starGeo.setAttribute('color', new THREE.BufferAttribute(starCol, 3));
+    const starMat = new THREE.PointsMaterial({
+      size: 0.08,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.5,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+    this._starField = new THREE.Points(starGeo, starMat);
+    this.scene.add(this._starField);
   }
 
   _updateAmbientParticles(t) {
@@ -536,17 +600,21 @@ export class ChessBoard3D {
       arr[i * 3 + 1] += v.y;
       arr[i * 3 + 2] += v.z + Math.cos(t * 0.3 + v.drift) * 0.001;
 
-      // Wrap around
-      if (arr[i * 3 + 1] > 12) {
-        arr[i * 3]     = (Math.random() - 0.5) * 20;
+      if (arr[i * 3 + 1] > 14) {
+        arr[i * 3]     = (Math.random() - 0.5) * 24;
         arr[i * 3 + 1] = 0.5;
-        arr[i * 3 + 2] = (Math.random() - 0.5) * 20;
+        arr[i * 3 + 2] = (Math.random() - 0.5) * 24;
       }
     }
     posAttr.needsUpdate = true;
 
-    // Gentle opacity pulse
-    this._ambientPoints.material.opacity = 0.25 + Math.sin(t * 0.8) * 0.1;
+    this._ambientPoints.material.opacity = 0.3 + Math.sin(t * 0.8) * 0.1;
+
+    // Slowly rotate starfield
+    if (this._starField) {
+      this._starField.rotation.y += 0.0001;
+      this._starField.material.opacity = 0.35 + Math.sin(t * 0.3) * 0.15;
+    }
   }
 
   // ── Confetti system for victory ──
@@ -596,6 +664,61 @@ export class ChessBoard3D {
       );
       p.userData.life = 3 + Math.random() * 2;
     }
+  }
+
+  // Dramatic checkmate camera zoom
+  triggerCheckmateZoom() {
+    // Save current camera state
+    const origDist = this.cameraOrbitDist;
+    const origPitch = this.cameraOrbitPitch;
+    const targetDist = 8;
+    const targetPitch = 0.6;
+    const duration = 1200;
+    const startTime = performance.now();
+
+    const animateZoom = () => {
+      const elapsed = performance.now() - startTime;
+      const t = Math.min(1, elapsed / duration);
+      // Ease-out cubic
+      const ease = 1 - Math.pow(1 - t, 3);
+
+      this.cameraOrbitDist = origDist + (targetDist - origDist) * ease;
+      this.cameraOrbitPitch = origPitch + (targetPitch - origPitch) * ease;
+      this._updateCameraFromOrbit();
+
+      if (t < 1) {
+        requestAnimationFrame(animateZoom);
+      } else {
+        // Hold for a moment, then trigger confetti
+        setTimeout(() => {
+          this.triggerConfetti();
+          this.triggerShake(0.2);
+          // Bloom flash
+          if (this.bloomPass) {
+            const orig = this.bloomPass.strength;
+            this.bloomPass.strength = orig + 0.5;
+            setTimeout(() => { this.bloomPass.strength = orig; }, 300);
+          }
+        }, 400);
+
+        // Restore camera after 4 seconds
+        setTimeout(() => {
+          const restoreStart = performance.now();
+          const restoreDuration = 1500;
+          const animateRestore = () => {
+            const re = performance.now() - restoreStart;
+            const rt = Math.min(1, re / restoreDuration);
+            const rEase = 1 - Math.pow(1 - rt, 3);
+            this.cameraOrbitDist = targetDist + (origDist - targetDist) * rEase;
+            this.cameraOrbitPitch = targetPitch + (origPitch - targetPitch) * rEase;
+            this._updateCameraFromOrbit();
+            if (rt < 1) requestAnimationFrame(animateRestore);
+          };
+          requestAnimationFrame(animateRestore);
+        }, 4000);
+      }
+    };
+    requestAnimationFrame(animateZoom);
   }
 
   _updateConfetti(dt) {
@@ -757,11 +880,20 @@ export class ChessBoard3D {
     LIGHT_SQUARE = theme.light;
     DARK_SQUARE = theme.dark;
 
-    // Update square colors
+    // Update square colors + material properties
     for (const [sq, mesh] of this.squareMeshes) {
       const { file, rank } = this._fromAlgebraic(sq);
       const isLight = (rank + file) % 2 === 0;
       mesh.material.color.set(isLight ? LIGHT_SQUARE : DARK_SQUARE);
+      if (theme.squareRoughness !== undefined) mesh.material.roughness = isLight ? theme.squareRoughness : theme.squareRoughness + 0.1;
+      if (theme.squareMetalness !== undefined) mesh.material.metalness = theme.squareMetalness;
+      if (theme.squareOpacity !== undefined) {
+        mesh.material.transparent = true;
+        mesh.material.opacity = theme.squareOpacity;
+      } else {
+        mesh.material.transparent = false;
+        mesh.material.opacity = 1.0;
+      }
     }
 
     // Update board base & trim
@@ -797,15 +929,61 @@ export class ChessBoard3D {
       p.material.opacity = 1.0;
 
       const angle = Math.random() * Math.PI * 2;
-      const speed = 0.02 + Math.random() * 0.04;
+      const speed = 0.02 + Math.random() * 0.05;
       p.userData.velocity.set(
         Math.cos(angle) * speed,
-        0.03 + Math.random() * 0.05,
+        0.04 + Math.random() * 0.06,
         Math.sin(angle) * speed
       );
       p.userData.life = 1.0;
       p.userData.maxLife = 0.8 + Math.random() * 0.6;
       spawned++;
+    }
+  }
+
+  // Enhanced capture: shockwave ring + extra spark burst
+  spawnCaptureEffect(worldX, worldZ, color) {
+    // Burst of particles
+    this._spawnParticles(worldX, worldZ, color, 35);
+
+    // Shockwave ring that expands outward
+    const ringGeo = new THREE.RingGeometry(0.05, 0.1, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthTest: false,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(worldX, 0.08, worldZ);
+    this.scene.add(ring);
+
+    // Animate shockwave expansion
+    const startTime = performance.now();
+    const duration = 600;
+    const animateRing = () => {
+      const elapsed = performance.now() - startTime;
+      const t = Math.min(1, elapsed / duration);
+      const scale = 1 + t * 12;
+      ring.scale.set(scale, scale, 1);
+      ring.material.opacity = 0.9 * (1 - t);
+      if (t < 1) {
+        requestAnimationFrame(animateRing);
+      } else {
+        this.scene.remove(ring);
+        ring.geometry.dispose();
+        ring.material.dispose();
+      }
+    };
+    requestAnimationFrame(animateRing);
+
+    // Flash: briefly brighten the bloom
+    if (this.bloomPass) {
+      const origStrength = this.bloomPass.strength;
+      this.bloomPass.strength = origStrength + 0.3;
+      setTimeout(() => { this.bloomPass.strength = origStrength; }, 150);
     }
   }
 
@@ -889,6 +1067,9 @@ export class ChessBoard3D {
 
       // Update confetti
       this._updateConfetti(dt);
+
+      // Update trajectory trail
+      this._updateTrajectoryTrail(dt);
 
       // Render with post-processing
       this.composer.render();
@@ -992,10 +1173,10 @@ export class ChessBoard3D {
 
     const targetMesh = this.pieceMeshes.get(toSq);
     if (targetMesh && targetMesh !== mesh) {
-      // Capture — spawn particles + camera shake!
+      // Capture — spawn enhanced effect + camera shake!
       const captureColor = targetMesh.userData.isWhite ? 0xf5f0e8 : 0x6644aa;
-      this._spawnParticles(targetMesh.position.x, targetMesh.position.z, captureColor, 25);
-      this.triggerShake(0.12);
+      this.spawnCaptureEffect(targetMesh.position.x, targetMesh.position.z, captureColor);
+      this.triggerShake(0.15);
       this.scene.remove(targetMesh);
       this.pieceMeshes.delete(toSq);
     }
@@ -1007,6 +1188,9 @@ export class ChessBoard3D {
     this.animating = true;
     mesh.userData.animProgress = 0;
     mesh.userData.animTarget = { x: worldPos.x, y: 0.04, z: worldPos.z };
+
+    // Draw trajectory trail
+    this._drawTrajectoryTrail(fromSq, toSq);
   }
 
   // ---- Highlights ----
@@ -1104,6 +1288,80 @@ export class ChessBoard3D {
     this._spawnParticles(pos.x, pos.z, HIGHLIGHT_CHECK, 15);
   }
 
+  /**
+   * Show a hint on the board: highlight the "from" square, the "to" square,
+   * draw a glowing arrow between them, and spawn particles.
+   */
+  highlightHint(fromSq, toSq) {
+    // Highlight source (pulsing glow ring)
+    this.highlightSquare(fromSq, HIGHLIGHT_HINT, 0.45, true);
+    // Highlight destination
+    this.highlightSquare(toSq, HIGHLIGHT_HINT, 0.35, true);
+
+    // Draw arrow from → to
+    const fromPos = this._fromAlgebraic(fromSq);
+    const toPos   = this._fromAlgebraic(toSq);
+    const from3D  = this._squareToWorld(fromPos.file, fromPos.rank);
+    const to3D    = this._squareToWorld(toPos.file, toPos.rank);
+
+    const dx = to3D.x - from3D.x;
+    const dz = to3D.z - from3D.z;
+    const length = Math.sqrt(dx * dx + dz * dz);
+    const angle  = Math.atan2(dx, dz);
+
+    // Arrow shaft
+    const shaftLen = Math.max(0.1, length - 0.35);
+    const shaftGeo = new THREE.PlaneGeometry(0.08, shaftLen);
+    const shaftMat = new THREE.MeshBasicMaterial({
+      color: HIGHLIGHT_HINT,
+      transparent: true,
+      opacity: 0.7,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+    shaft.rotation.x = -Math.PI / 2;
+    shaft.rotation.z = -angle;
+    shaft.position.set(
+      from3D.x + dx * 0.4,
+      0.055,
+      from3D.z + dz * 0.4
+    );
+    this.scene.add(shaft);
+    this.highlightMeshes.push(shaft);
+
+    // Arrow head (triangle)
+    const headGeo = new THREE.BufferGeometry();
+    const s = 0.15;
+    const verts = new Float32Array([
+      0, 0,  s * 1.5,
+     -s, 0, -s * 0.5,
+      s, 0, -s * 0.5,
+    ]);
+    headGeo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    headGeo.computeVertexNormals();
+    const headMat = new THREE.MeshBasicMaterial({
+      color: HIGHLIGHT_HINT,
+      transparent: true,
+      opacity: 0.8,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    const head = new THREE.Mesh(headGeo, headMat);
+    head.rotation.y = angle;
+    head.position.set(
+      to3D.x - dx / length * 0.22,
+      0.055,
+      to3D.z - dz / length * 0.22
+    );
+    this.scene.add(head);
+    this.highlightMeshes.push(head);
+
+    // Particles on both squares
+    this._spawnParticles(from3D.x, from3D.z, HIGHLIGHT_HINT, 10);
+    this._spawnParticles(to3D.x, to3D.z, HIGHLIGHT_HINT, 12);
+  }
+
   // ---- Click detection ----
 
   getSquareAtScreen(screenX, screenY) {
@@ -1140,6 +1398,208 @@ export class ChessBoard3D {
     }
 
     return null;
+  }
+
+  // ---- Move Trajectory Trail ----
+
+  _drawTrajectoryTrail(fromSq, toSq) {
+    this._clearTrajectoryTrail();
+
+    const fromCoord = this._fromAlgebraic(fromSq);
+    const toCoord = this._fromAlgebraic(toSq);
+    const from3D = this._squareToWorld(fromCoord.file, fromCoord.rank);
+    const to3D = this._squareToWorld(toCoord.file, toCoord.rank);
+
+    // Create a curved trail using CatmullRomCurve
+    const midY = 0.5;
+    const points = [];
+    const steps = 20;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = from3D.x + (to3D.x - from3D.x) * t;
+      const z = from3D.z + (to3D.z - from3D.z) * t;
+      const y = 0.06 + Math.sin(t * Math.PI) * midY;
+      points.push(new THREE.Vector3(x, y, z));
+    }
+
+    const curve = new THREE.CatmullRomCurve3(points);
+    const tubeGeo = new THREE.TubeGeometry(curve, 24, 0.02, 6, false);
+    const tubeMat = new THREE.MeshBasicMaterial({
+      color: 0x00e5ff,
+      transparent: true,
+      opacity: 0.5,
+      depthTest: false,
+    });
+    const tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
+    this.scene.add(tubeMesh);
+
+    this._trajectoryTrail = { mesh: tubeMesh, life: 2.0 };
+  }
+
+  _clearTrajectoryTrail() {
+    if (this._trajectoryTrail) {
+      this.scene.remove(this._trajectoryTrail.mesh);
+      this._trajectoryTrail.mesh.geometry.dispose();
+      this._trajectoryTrail.mesh.material.dispose();
+      this._trajectoryTrail = null;
+    }
+  }
+
+  _updateTrajectoryTrail(dt) {
+    if (!this._trajectoryTrail) return;
+    this._trajectoryTrail.life -= dt;
+    if (this._trajectoryTrail.life <= 0) {
+      this._clearTrajectoryTrail();
+    } else {
+      const alpha = Math.min(1, this._trajectoryTrail.life * 0.5);
+      this._trajectoryTrail.mesh.material.opacity = alpha * 0.5;
+    }
+  }
+
+  // ---- Board Annotation System (right-click drag arrows, shift-click circles) ----
+
+  _initAnnotationSystem() {
+    this.canvas.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) {
+        // Right-click: start annotation drag
+        e.preventDefault();
+        const sq = this.getSquareAtScreen(e.clientX, e.clientY);
+        if (sq) {
+          this._annotationDragging = true;
+          this._annotationFrom = sq;
+        }
+      }
+    });
+
+    this.canvas.addEventListener('pointerup', (e) => {
+      if (e.button === 2 && this._annotationDragging) {
+        e.preventDefault();
+        const sq = this.getSquareAtScreen(e.clientX, e.clientY);
+        this._annotationDragging = false;
+
+        if (sq && this._annotationFrom) {
+          if (sq === this._annotationFrom) {
+            // Same square: draw a circle annotation
+            this._addCircleAnnotation(sq);
+          } else {
+            // Different square: draw an arrow annotation
+            this._addArrowAnnotation(this._annotationFrom, sq);
+          }
+        }
+        this._annotationFrom = null;
+      }
+    });
+  }
+
+  _addArrowAnnotation(fromSq, toSq) {
+    const fromCoord = this._fromAlgebraic(fromSq);
+    const toCoord = this._fromAlgebraic(toSq);
+    const from3D = this._squareToWorld(fromCoord.file, fromCoord.rank);
+    const to3D = this._squareToWorld(toCoord.file, toCoord.rank);
+
+    const color = 0xff8800;
+    const dx = to3D.x - from3D.x;
+    const dz = to3D.z - from3D.z;
+    const length = Math.sqrt(dx * dx + dz * dz);
+    const angle = Math.atan2(dx, dz);
+
+    // Arrow shaft
+    const shaftLen = Math.max(0.1, length - 0.3);
+    const shaftGeo = new THREE.PlaneGeometry(0.06, shaftLen);
+    const shaftMat = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.6, depthTest: false, side: THREE.DoubleSide,
+    });
+    const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+    shaft.rotation.x = -Math.PI / 2;
+    shaft.rotation.z = -angle;
+    shaft.position.set(from3D.x + dx * 0.4, 0.06, from3D.z + dz * 0.4);
+    this.scene.add(shaft);
+
+    // Arrow head
+    const headGeo = new THREE.BufferGeometry();
+    const s = 0.12;
+    const verts = new Float32Array([0, 0, s * 1.5, -s, 0, -s * 0.5, s, 0, -s * 0.5]);
+    headGeo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    headGeo.computeVertexNormals();
+    const headMat = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.7, depthTest: false, side: THREE.DoubleSide,
+    });
+    const head = new THREE.Mesh(headGeo, headMat);
+    head.rotation.y = angle;
+    head.position.set(to3D.x - dx / length * 0.2, 0.06, to3D.z - dz / length * 0.2);
+    this.scene.add(head);
+
+    this._annotations.push(shaft, head);
+  }
+
+  _addCircleAnnotation(sq) {
+    const coord = this._fromAlgebraic(sq);
+    const pos = this._squareToWorld(coord.file, coord.rank);
+    const color = 0xff8800;
+
+    const ringGeo = new THREE.RingGeometry(0.35, 0.42, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthTest: false,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pos.x, 0.06, pos.z);
+    this.scene.add(ring);
+    this._annotations.push(ring);
+  }
+
+  clearAnnotations() {
+    for (const mesh of this._annotations) {
+      this.scene.remove(mesh);
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) mesh.material.dispose();
+    }
+    this._annotations = [];
+  }
+
+  // ---- Drag and Drop Support ----
+
+  liftPiece(sq) {
+    const mesh = this.pieceMeshes.get(sq);
+    if (!mesh) return;
+    this._liftedPieceSq = sq;
+    this._liftedPieceOrigY = mesh.position.y;
+    mesh.position.y = 0.5;
+  }
+
+  dragPiece(sq, screenX, screenY) {
+    const mesh = this.pieceMeshes.get(sq);
+    if (!mesh) return;
+
+    // Raycast to get world position at board height
+    const rect = this.canvas.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((screenX - rect.left) / rect.width) * 2 - 1,
+      -((screenY - rect.top) / rect.height) * 2 + 1
+    );
+    this.raycaster.setFromCamera(mouse, this.camera);
+
+    // Intersect with a horizontal plane at y=0.5
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.5);
+    const intersection = new THREE.Vector3();
+    this.raycaster.ray.intersectPlane(plane, intersection);
+
+    if (intersection) {
+      mesh.position.x = intersection.x;
+      mesh.position.z = intersection.z;
+      mesh.position.y = 0.5;
+    }
+  }
+
+  dropPiece(sq) {
+    const mesh = this.pieceMeshes.get(sq);
+    if (!mesh) return;
+
+    // Snap back to proper position
+    const coord = this._fromAlgebraic(sq);
+    const worldPos = this._squareToWorld(coord.file, coord.rank);
+    mesh.position.set(worldPos.x, this._liftedPieceOrigY, worldPos.z);
+    this._liftedPieceSq = null;
   }
 
   flipBoard() {

@@ -1,13 +1,19 @@
 /**
- * 3D Chess — Main Game Controller v2
+ * 3D Chess — Main Game Controller v3
  *
  * Ties together the 3D board, API communication, UI controls,
  * sound effects, keyboard shortcuts, move timer, theme selector,
- * and game logic. Includes real-time AI learning status display.
+ * opening explorer, rating system, achievements, PGN export,
+ * AI personalities, puzzle mode, game review, and undo/redo.
  */
 import { ChessBoard3D } from './board.js';
 import { ChessAPI } from './api.js';
 import { sounds } from './sounds.js';
+import { identifyOpening } from './openings.js';
+import { updateRating, getRating, getRankTitle } from './rating.js';
+import { checkAchievements, getAllAchievements, getUnlockedCount, getTotalCount, triggerAchievement } from './achievements.js';
+import { toPGN, downloadPGN, copyPGN, saveGame, loadHistory, formatGameSummary } from './pgn.js';
+import { initBridge, isTauri } from './bridge.js';
 
 // Piece symbols for captured display (lowercase keys to match engine API)
 const PIECE_UNICODE = {
@@ -46,6 +52,48 @@ class ChessGame {
     // Move notation state (for building SAN)
     this._prevPieces = []; // pieces before the last move
 
+    // Undo/Redo
+    this._fenHistory = [];    // Stack of FEN positions (before each move)
+    this._moveHistoryUCI = []; // Parallel UCI move stack
+    this._redoStack = [];     // Redo stack of { fen, uci, san, captured } objects
+    this._capturedHistory = []; // Parallel stack: { piece, color } or null per move
+
+    // Opening explorer
+    this._currentOpening = null;
+
+    // Game review
+    this._fenLog = [];  // All FENs during the game for post-mortem review
+    this._lastGameFenLog = [];   // Preserved copy for review after new game
+    this._lastGameMoveHistory = [];
+    this._hadPromotion = false;
+
+    // AI Personality
+    this.aiPersonality = 'default';
+
+    // Game mode: 'normal' | 'training' | 'friendly'
+    this.gameMode = 'normal';
+
+    // Puzzle mode
+    this._puzzleMode = false;
+    this._currentPuzzle = null;
+    this._puzzleMoveIndex = 0;
+    this._solvedPuzzles = JSON.parse(localStorage.getItem('chess_solved_puzzles') || '[]');
+
+    // Pre-move system
+    this._preMove = null; // { from, to } queued pre-move
+    this._preMoveSelectedSquare = null;
+
+    // Move quality badges (engine-evaluated, keyed by move index)
+    this._moveQualities = {};
+
+    // Clock mode
+    this._clockMode = 'elapsed'; // 'elapsed' | '5' | '10' | '15' | '30'
+    this._clockInitialTime = 0; // initial seconds for countdown modes
+
+    // Drag and drop
+    this._dragging = false;
+    this._dragPieceSq = null;
+
     // Init 3D board
     const canvas = document.getElementById('chess-canvas');
     this.board = new ChessBoard3D(canvas);
@@ -56,6 +104,15 @@ class ChessGame {
     this._initThemeSelector();
     this._initVolumeControl();
     this._initTutor();
+    this._initPersonalitySelector();
+    this._initGameModeSelector();
+    this._initRatingDisplay();
+    this._initAchievementsPanel();
+    this._initGameHistory();
+    this._initPuzzlePanel();
+    this._initStatsPanel();
+    this._initClockModes();
+    this._initDragAndDrop();
     this.newGame();
 
     // Poll AI learning status every 10 seconds
@@ -71,6 +128,12 @@ class ChessGame {
     document.getElementById('btn-new-game').addEventListener('click', () => this.newGame());
     document.getElementById('btn-flip').addEventListener('click', () => this.board.flipBoard());
     document.getElementById('btn-undo').addEventListener('click', () => this._undo());
+    const redoBtn = document.getElementById('btn-redo');
+    if (redoBtn) redoBtn.addEventListener('click', () => this._redo());
+    const exportBtn = document.getElementById('btn-export-pgn');
+    if (exportBtn) exportBtn.addEventListener('click', () => this._exportPGN());
+    const reviewBtn = document.getElementById('btn-review');
+    if (reviewBtn) reviewBtn.addEventListener('click', () => this._reviewGame());
     document.getElementById('use-ai').addEventListener('change', (e) => {
       this.useAI = e.target.checked;
     });
@@ -108,6 +171,26 @@ class ChessGame {
           const enabled = sounds.toggle();
           const soundBtn = document.getElementById('btn-sound');
           if (soundBtn) soundBtn.textContent = enabled ? '🔊' : '🔇';
+          break;
+        case 'h':
+          e.preventDefault();
+          this._requestHint();
+          break;
+        case 't':
+          e.preventDefault();
+          this._cycleGameMode();
+          break;
+        case 'z':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            this._undo();
+          }
+          break;
+        case 'y':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            this._redo();
+          }
           break;
       }
     });
@@ -182,13 +265,23 @@ class ChessGame {
 
     // ── Minimize / restore ──
     const minimizeBtn = document.getElementById('tutor-minimize');
+    const toggleCoach = () => {
+      panel.classList.toggle('minimized');
+      const icon = panel.querySelector('#tutor-minimize .minimize-icon');
+      if (icon) icon.textContent = panel.classList.contains('minimized') ? '▲ Coach' : '▼ Hide';
+    };
     if (minimizeBtn) {
-      minimizeBtn.addEventListener('click', () => {
-        panel.classList.toggle('minimized');
-        const icon = minimizeBtn.querySelector('.minimize-icon');
-        if (icon) icon.textContent = panel.classList.contains('minimized') ? '▲' : '▼';
+      minimizeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleCoach();
       });
     }
+    // When minimized, clicking anywhere on the pill expands it
+    panel.addEventListener('click', (e) => {
+      if (panel.classList.contains('minimized')) {
+        toggleCoach();
+      }
+    });
 
     // ── AI Chat: send button + Enter key ──
     const chatInput = document.getElementById('ai-chat-input');
@@ -214,7 +307,14 @@ class ChessGame {
       });
     });
 
+    // ── Hint button ──
+    const hintBtn = document.getElementById('btn-hint');
+    if (hintBtn) {
+      hintBtn.addEventListener('click', () => this._requestHint());
+    }
+
     this._lessonsLoaded = false;
+    this._hintTimeout = null;
     this.tutorEnabled = true;
   }
 
@@ -269,6 +369,95 @@ class ChessGame {
       .replace(/\n{2,}/g, '</p><p>')
       .replace(/\n/g, '<br>')
       .replace(/^/, '<p>').replace(/$/, '</p>');
+  }
+
+  // ── Hint System ──
+
+  async _requestHint() {
+    const btn = document.getElementById('btn-hint');
+    const status = document.getElementById('hint-status');
+
+    // Guard: must be player's turn, game active, not thinking
+    if (this.thinking || this.status !== 'Active') {
+      if (status) status.textContent = 'Wait for your turn...';
+      return;
+    }
+    if (!this._isPlayerTurn()) {
+      if (status) status.textContent = 'Wait for your turn...';
+      return;
+    }
+    if (!this.fen) {
+      if (status) status.textContent = 'Start a game first!';
+      return;
+    }
+
+    // Disable button while loading
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = 'Analyzing position...';
+
+    try {
+      // Ask AI for the best move at a low simulation count (fast)
+      const result = await this.api.aiMove(this.fen, 'beginner');
+
+      if (result && result.move) {
+        const fromSq = result.move.substring(0, 2);
+        const toSq = result.move.substring(2, 4);
+
+        // Clear existing highlights and show hint
+        this.board.clearHighlights();
+        this.board.highlightHint(fromSq, toSq);
+
+        // Build a human-readable hint for the coach panel
+        const piece = this.pieces.find(p => p.square === fromSq);
+        const pieceName = piece ? piece.piece_type.charAt(0).toUpperCase() + piece.piece_type.slice(1) : 'Piece';
+        const target = this.pieces.find(p => p.square === toSq);
+        const isCapture = target && target.color !== (piece ? piece.color : '');
+
+        let hintText = `Move <strong>${pieceName}</strong> from <strong>${fromSq}</strong> to <strong>${toSq}</strong>`;
+        if (isCapture) {
+          const capName = target.piece_type.charAt(0).toUpperCase() + target.piece_type.slice(1);
+          hintText += ` (captures ${capName}!)`;
+        }
+
+        // Show top alternatives if available
+        if (result.top_moves && result.top_moves.length > 1) {
+          hintText += '<br><span style="color:var(--text-muted);font-size:0.72rem;">Also consider: ';
+          hintText += result.top_moves.slice(1, 3).map(m => m.san || m.move).join(', ');
+          hintText += '</span>';
+        }
+
+        if (status) status.textContent = '';
+
+        // Add hint to coach content
+        const coachEl = document.getElementById('tutor-coach-content');
+        if (coachEl) {
+          const tip = document.createElement('div');
+          tip.className = 'tutor-tip';
+          tip.innerHTML = `<span class="tutor-tag" style="background:rgba(0,229,255,0.15);color:#00e5ff;">💡 HINT</span> ${hintText}`;
+          coachEl.appendChild(tip);
+          coachEl.scrollTop = coachEl.scrollHeight;
+        }
+
+        // Auto-clear hint highlights after 5 seconds
+        if (this._hintTimeout) clearTimeout(this._hintTimeout);
+        this._hintTimeout = setTimeout(() => {
+          this.board.clearHighlights();
+          // Restore last move highlight if exists
+          if (this.lastMoveFrom && this.lastMoveTo) {
+            this.board.highlightLastMove(this.lastMoveFrom, this.lastMoveTo);
+          }
+        }, 5000);
+
+        sounds.playSelect();
+      } else {
+        if (status) status.textContent = 'AI unavailable — try again';
+      }
+    } catch (err) {
+      console.error('Hint request failed:', err);
+      if (status) status.textContent = 'Error getting hint';
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   // ── Learn Tab ──
@@ -338,14 +527,53 @@ class ChessGame {
     this.playerColor = document.getElementById('color-select').value;
     this.useAI = document.getElementById('use-ai').checked;
 
-    // Reset timer
+    // Preserve last game data for review
+    if (this._fenLog.length > 1) {
+      this._lastGameFenLog = [...this._fenLog];
+      this._lastGameMoveHistory = [...this.moveHistory];
+    }
+
+    // Reset undo/redo
+    this._fenHistory = [];
+    this._moveHistoryUCI = [];
+    this._redoStack = [];
+    this._capturedHistory = [];
+    this._fenLog = [];
+    this._hadPromotion = false;
+    this._currentOpening = null;
+    this._puzzleMode = false;
+
+    // Restore AI if it was toggled off for puzzle mode
+    if (this._savedUseAI !== undefined) {
+      this.useAI = this._savedUseAI;
+      delete this._savedUseAI;
+    }
+
+    // Clear pre-move
+    this._clearPreMove();
+
+    // Reset move qualities
+    this._moveQualities = {};
+
+    // Reset timer for clock mode
     this._stopTimer();
-    this.whiteTime = 0;
-    this.blackTime = 0;
+    if (this._clockMode === 'elapsed') {
+      this.whiteTime = 0;
+      this.blackTime = 0;
+    } else {
+      this.whiteTime = this._clockInitialTime;
+      this.blackTime = this._clockInitialTime;
+    }
     this._updateTimerDisplay();
 
     // Hide overlay
     document.getElementById('overlay').style.display = 'none';
+
+    // Keep review button enabled if there's a previous game to review
+    const reviewBtn = document.getElementById('btn-review');
+    if (reviewBtn && this._lastGameFenLog && this._lastGameFenLog.length >= 2) {
+      reviewBtn.disabled = false;
+    }
 
     sounds.playSelect();
 
@@ -361,6 +589,10 @@ class ChessGame {
       this.board.clearHighlights();
       this.board.setPieces(this.pieces);
       this._updateUI();
+      this._updateUndoRedoButtons();
+
+      // Log starting position
+      this._fenLog.push(this.fen);
 
       this._timerStarted = false;
 
@@ -377,7 +609,7 @@ class ChessGame {
     }
   }
 
-  _onBoardClick(e) {
+  async _onBoardClick(e) {
     if (this.thinking || this.status !== 'Active') return;
     if (this.animating) return;
 
@@ -387,19 +619,38 @@ class ChessGame {
     const sq = this.board.getSquareAtScreen(e.clientX, e.clientY);
     if (!sq) return;
 
+    // Clear annotations on left click
+    if (this.board.clearAnnotations) this.board.clearAnnotations();
+
     const isPlayerTurn = this._isPlayerTurn();
-    if (!isPlayerTurn && this.useAI) return;
+
+    // Pre-move system: if it's not our turn, queue the pre-move
+    if (!isPlayerTurn && this.useAI) {
+      this._handlePreMoveClick(sq);
+      return;
+    }
 
     if (this.selectedSquare) {
       // Try to make a move
       const uci = this.selectedSquare + sq;
       // Check for promotion: if pawn moving to last rank
-      const promoUci = this._checkPromotion(this.selectedSquare, sq, uci);
+      const promoResult = this._checkPromotion(this.selectedSquare, sq, uci);
 
-      if (this.legalMoves.includes(promoUci) || this.legalMoves.includes(uci)) {
-        this._makeMove(promoUci || uci);
-        this.selectedSquare = null;
-        return;
+      if (promoResult instanceof Promise) {
+        // Wait for user to choose promotion piece
+        const promoUci = await promoResult;
+        if (this.legalMoves.includes(promoUci)) {
+          this._makeMove(promoUci);
+          this.selectedSquare = null;
+          return;
+        }
+      } else {
+        const promoUci = promoResult;
+        if (this.legalMoves.includes(promoUci || uci)) {
+          this._makeMove(promoUci || uci);
+          this.selectedSquare = null;
+          return;
+        }
       }
 
       // Clicked own piece — reselect
@@ -445,8 +696,31 @@ class ChessGame {
     const toRank = parseInt(to[1]);
     if ((piece.color === 'white' && toRank === 8) ||
         (piece.color === 'black' && toRank === 1)) {
-      // Auto-promote to queen for now
-      return uci + 'q';
+      // Return a promise that resolves with the chosen promotion piece
+      return new Promise((resolve) => {
+        const dialog = document.getElementById('promotion-dialog');
+        if (!dialog) { resolve(uci + 'q'); return; }
+
+        // Update piece symbols for the correct color
+        const isWhite = piece.color === 'white';
+        const symbols = isWhite
+          ? { q: '♕', r: '♖', b: '♗', n: '♘' }
+          : { q: '♛', r: '♜', b: '♝', n: '♞' };
+        dialog.querySelectorAll('.promo-piece').forEach(el => {
+          el.textContent = symbols[el.dataset.piece];
+        });
+
+        dialog.style.display = 'block';
+
+        const onClick = (e) => {
+          const pieceEl = e.target.closest('.promo-piece');
+          if (!pieceEl) return;
+          dialog.style.display = 'none';
+          dialog.removeEventListener('click', onClick);
+          resolve(uci + pieceEl.dataset.piece);
+        };
+        dialog.addEventListener('click', onClick);
+      });
     }
     return null;
   }
@@ -459,9 +733,25 @@ class ChessGame {
         this._startTimer();
       }
 
+      // Track for undo
+      this._fenHistory.push(this.fen);
+      this._moveHistoryUCI.push(uci);
+      this._redoStack = []; // Clear redo on new move
+
+      // Track promotion
+      if (uci.length > 4) this._hadPromotion = true;
+
       const prevPieces = [...this.pieces];
       const data = await this.api.makeMove(this.gameId, uci);
-      if (!data.success) return;
+      if (!data.success) {
+        // Rollback tracking
+        this._fenHistory.pop();
+        this._moveHistoryUCI.pop();
+        return;
+      }
+
+      // Log FEN for review
+      this._fenLog.push(data.fen);
 
       // Track the move
       const fromSq = uci.substring(0, 2);
@@ -477,8 +767,10 @@ class ChessGame {
         } else {
           this.capturedBlack.push(data.captured);
         }
+        this._capturedHistory.push({ piece: data.captured, color: capColor });
         sounds.playCapture();
       } else {
+        this._capturedHistory.push(null);
         sounds.playMove();
       }
 
@@ -515,17 +807,38 @@ class ChessGame {
 
       this._updateUI();
       this._updateTutor(uci, data);
+      this._updateOpening();
+      this._updateUndoRedoButtons();
 
       // Check for game over
       if (this.status !== 'Active') {
         this._stopTimer();
         this._showGameOver();
+        this._onGameEnd();
+        return;
+      }
+
+      // Puzzle mode: check the move first (don't let AI respond)
+      if (this._puzzleMode && this._currentPuzzle) {
+        this._checkPuzzleMove(uci);
         return;
       }
 
       // AI responds
       if (this.useAI && !this._isPlayerTurn()) {
         await this._aiMove();
+        // Execute pre-move if one was queued
+        if (this._preMove && this._isPlayerTurn() && this.status === 'Active') {
+          await this._executePreMove();
+        }
+      }
+
+      // Request NN evaluation (non-blocking)
+      this._updateNNEval();
+
+      // Training mode: auto-show hint for next move
+      if ((this.gameMode === 'training' || this.gameMode === 'friendly') && this._isPlayerTurn() && this.status === 'Active') {
+        setTimeout(() => this._requestHint(), 600);
       }
     } catch (err) {
       console.error('Move failed:', err);
@@ -541,7 +854,7 @@ class ChessGame {
       const difficulty = document.getElementById('difficulty-select').value;
       let moveUci = null;
 
-      const aiResult = await this.api.aiMove(this.fen, difficulty);
+      const aiResult = await this.api.aiMove(this.fen, difficulty, this.gameId, this.playerColor, this.aiPersonality);
       if (aiResult && aiResult.move) {
         moveUci = aiResult.move;
       } else {
@@ -623,6 +936,10 @@ class ChessGame {
       this._startTimer();
     }
 
+    // Track for undo
+    this._fenHistory.push(this.fen);
+    this._moveHistoryUCI.push(uci);
+
     const prevPieces = [...this.pieces];
     const data = await this.api.makeMove(this.gameId, uci);
     if (!data.success) return;
@@ -652,6 +969,9 @@ class ChessGame {
     this.status = data.status;
     this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
 
+    // Log FEN for review
+    this._fenLog.push(data.fen);
+
     setTimeout(() => {
       this.board.setPieces(this.pieces);
       this.board.clearHighlights();
@@ -667,7 +987,12 @@ class ChessGame {
 
     this._updateUI();
     this._updateTutor(uci, data);
-    if (this.status !== 'Active') this._showGameOver();
+    this._updateOpening();
+    this._updateUndoRedoButtons();
+    if (this.status !== 'Active') {
+      this._showGameOver();
+      this._onGameEnd();
+    }
   }
 
   // ── Chess Notation ──
@@ -835,6 +1160,31 @@ class ChessGame {
       tips.push({ tag: 'TIP', text: 'Good move. Keep playing solidly!' });
     }
 
+    // Training / Friendly mode: always add extra context about the last move
+    if (this.gameMode === 'training' || this.gameMode === 'friendly') {
+      const from = uci.substring(0, 2);
+      const to = uci.substring(2, 4);
+      const movedPiece = (data.pieces || this.pieces).find(p => p.square === to) ||
+                          this.pieces.find(p => p.square === from);
+      const pieceName = movedPiece ? movedPiece.piece_type.charAt(0).toUpperCase() + movedPiece.piece_type.slice(1) : 'Piece';
+      const side = this.sideToMove === 'white' ? 'Black' : 'White';
+
+      if (!this._isPlayerTurn()) {
+        // This was the player's move — explain what it achieved
+        tips.push({ tag: 'YOUR MOVE', text: `You moved <strong>${pieceName}</strong> ${from} → ${to}. ${data.captured ? 'Captured material! ' : ''}${data.is_check ? 'Check! Excellent pressure!' : 'Develop pieces and control the center.'}` });
+      } else {
+        // This was the AI's move — explain what the opponent did
+        tips.push({ tag: 'OPPONENT', text: `${side} played <strong>${pieceName}</strong> ${from} → ${to}. ${data.captured ? 'They captured material. Look for counterplay!' : 'Consider how to respond to this move.'}` });
+      }
+
+      if (this.gameMode === 'training') {
+        tips.push({ tag: 'TRAINING', text: 'Press <strong>H</strong> or click 💡 Show Hint to see the best move. A hint will auto-appear shortly.' });
+      }
+      if (this.gameMode === 'friendly') {
+        tips.push({ tag: 'FRIENDLY', text: 'Take your time! Use ↩ Undo freely to try different moves and learn.' });
+      }
+    }
+
     msgEl.innerHTML = tips.map(t =>
       `<div class="tutor-tip"><span class="tutor-tag">${t.tag}</span> ${t.text}</div>`
     ).join('');
@@ -842,9 +1192,1123 @@ class ChessGame {
   }
 
   async _undo() {
-    // Undo last two moves (player + AI)
-    // For now just refresh the game
-    console.log('Undo not yet implemented');
+    // Undo exactly one move by restoring from FEN history
+    if (this.thinking || this.status !== 'Active') return;
+    if (this._fenHistory.length === 0) return;
+
+    // Pop the last move's data
+    const targetFen = this._fenHistory.pop();
+    const undoneUci = this._moveHistoryUCI.pop();
+    const undoneSan = this.moveHistory.pop();
+    const undoneCap = this._capturedHistory.pop();
+    this._fenLog.pop();
+
+    // Save to redo stack so we can redo this move later
+    this._redoStack.push({
+      uci: undoneUci,
+      san: undoneSan,
+      captured: undoneCap,
+    });
+
+    // Reverse captured-piece tracking
+    if (undoneCap) {
+      if (undoneCap.color === 'white') {
+        this.capturedWhite.pop();
+      } else {
+        this.capturedBlack.pop();
+      }
+    }
+
+    try {
+      // Create a new engine game at the target position
+      const data = await this.api.newGame(targetFen);
+      this.gameId = data.game_id;
+      this.fen = data.fen;
+      this.pieces = data.pieces;
+      this.legalMoves = data.legal_moves;
+      this.sideToMove = this.moveHistory.length % 2 === 0 ? 'white' : 'black';
+      this.isCheck = false;
+      this.selectedSquare = null;
+
+      // Restore last-move highlight from remaining history
+      if (this._moveHistoryUCI.length > 0) {
+        const prevUci = this._moveHistoryUCI[this._moveHistoryUCI.length - 1];
+        this.lastMoveFrom = prevUci.substring(0, 2);
+        this.lastMoveTo = prevUci.substring(2, 4);
+      } else {
+        this.lastMoveFrom = null;
+        this.lastMoveTo = null;
+      }
+
+      this.board.clearHighlights();
+      this.board.setPieces(this.pieces);
+      if (this.lastMoveFrom && this.lastMoveTo) {
+        this.board.highlightLastMove(this.lastMoveFrom, this.lastMoveTo);
+      }
+      this._updateUI();
+      this._updateUndoRedoButtons();
+      sounds.playSelect();
+    } catch (err) {
+      console.error('Undo failed:', err);
+      // Rollback — re-push everything we popped
+      const redoItem = this._redoStack.pop();
+      this._fenHistory.push(targetFen);
+      this._moveHistoryUCI.push(redoItem.uci);
+      this.moveHistory.push(redoItem.san);
+      this._capturedHistory.push(redoItem.captured);
+      if (redoItem.captured) {
+        if (redoItem.captured.color === 'white') {
+          this.capturedWhite.push(redoItem.captured.piece);
+        } else {
+          this.capturedBlack.push(redoItem.captured.piece);
+        }
+      }
+    }
+  }
+
+  async _redo() {
+    if (this.thinking || this._redoStack.length === 0 || this.status !== 'Active') return;
+
+    const redoItem = this._redoStack.pop();
+
+    try {
+      // Track state before replaying the move (for potential future undo)
+      this._fenHistory.push(this.fen);
+      this._moveHistoryUCI.push(redoItem.uci);
+      this.moveHistory.push(redoItem.san);
+      this._capturedHistory.push(redoItem.captured);
+
+      // Replay the move on the engine
+      const data = await this.api.makeMove(this.gameId, redoItem.uci);
+      if (!data.success) {
+        // Rollback tracking
+        this._fenHistory.pop();
+        this._moveHistoryUCI.pop();
+        this.moveHistory.pop();
+        this._capturedHistory.pop();
+        this._redoStack.push(redoItem);
+        return;
+      }
+
+      this._fenLog.push(data.fen);
+      this.fen = data.fen;
+      this.pieces = data.pieces;
+      this.legalMoves = data.legal_moves;
+      this.isCheck = data.is_check;
+      this.status = data.status;
+      this.sideToMove = this.moveHistory.length % 2 === 0 ? 'white' : 'black';
+      this.selectedSquare = null;
+
+      // Restore captured-piece tracking
+      if (redoItem.captured) {
+        if (redoItem.captured.color === 'white') {
+          this.capturedWhite.push(redoItem.captured.piece);
+        } else {
+          this.capturedBlack.push(redoItem.captured.piece);
+        }
+      }
+
+      // Highlight the replayed move
+      const fromSq = redoItem.uci.substring(0, 2);
+      const toSq = redoItem.uci.substring(2, 4);
+      this.lastMoveFrom = fromSq;
+      this.lastMoveTo = toSq;
+
+      this.board.clearHighlights();
+      this.board.setPieces(this.pieces);
+      this.board.highlightLastMove(fromSq, toSq);
+
+      if (this.isCheck) {
+        const king = this.pieces.find(
+          (p) => p.piece_type === 'king' && p.color === this.sideToMove
+        );
+        if (king) this.board.highlightCheck(king.square);
+      }
+
+      this._updateUI();
+      this._updateUndoRedoButtons();
+      sounds.playSelect();
+    } catch (err) {
+      console.error('Redo failed:', err);
+      // Rollback
+      this._fenHistory.pop();
+      this._moveHistoryUCI.pop();
+      this.moveHistory.pop();
+      this._capturedHistory.pop();
+      this._redoStack.push(redoItem);
+    }
+  }
+
+  _updateUndoRedoButtons() {
+    const undoBtn = document.getElementById('btn-undo');
+    const redoBtn = document.getElementById('btn-redo');
+    if (undoBtn) undoBtn.disabled = this._fenHistory.length === 0 || this.status !== 'Active';
+    if (redoBtn) redoBtn.disabled = this._redoStack.length === 0 || this.status !== 'Active';
+  }
+
+  // ── Opening Explorer ──
+
+  _updateOpening() {
+    const opening = identifyOpening(this._moveHistoryUCI);
+    if (opening && (!this._currentOpening || opening.moves > this._currentOpening.moves)) {
+      this._currentOpening = opening;
+    }
+    const el = document.getElementById('opening-display');
+    if (el && this._currentOpening) {
+      el.innerHTML = `<span class="opening-eco">${this._currentOpening.eco || ''}</span> ${this._currentOpening.name}`;
+      el.title = this._currentOpening.desc || '';
+      el.style.display = 'block';
+    } else if (el) {
+      el.style.display = 'none';
+    }
+  }
+
+  // ── AI Personality Selector ──
+
+  _initPersonalitySelector() {
+    const sel = document.getElementById('personality-select');
+    if (!sel) return;
+    sel.addEventListener('change', (e) => {
+      this.aiPersonality = e.target.value;
+      sounds.playSelect();
+    });
+  }
+
+  // ── Game Mode Selector (Normal / Training / Friendly) ──
+
+  _initGameModeSelector() {
+    const sel = document.getElementById('game-mode-select');
+    if (!sel) return;
+
+    sel.addEventListener('change', (e) => {
+      this.gameMode = e.target.value;
+      sounds.playSelect();
+
+      // Toggle info banners
+      const trainingInfo = document.getElementById('training-mode-info');
+      const friendlyInfo = document.getElementById('friendly-mode-info');
+      if (trainingInfo) trainingInfo.style.display = this.gameMode === 'training' ? 'block' : 'none';
+      if (friendlyInfo) friendlyInfo.style.display = this.gameMode === 'friendly' ? 'block' : 'none';
+
+      // Open coach panel automatically in training/friendly mode
+      const tutorPanel = document.getElementById('tutor-panel');
+      if (tutorPanel && (this.gameMode === 'training' || this.gameMode === 'friendly')) {
+        tutorPanel.classList.remove('minimized');
+        const icon = document.querySelector('#tutor-minimize .minimize-icon');
+        if (icon) icon.textContent = '▼ Hide';
+      }
+
+      // In friendly mode AI is beginner and unlimited undo
+      if (this.gameMode === 'friendly') {
+        const diffSel = document.getElementById('difficulty-select');
+        if (diffSel) diffSel.value = 'beginner';
+      }
+    });
+  }
+
+  _cycleGameMode() {
+    const modes = ['normal', 'training', 'friendly'];
+    const currentIndex = modes.indexOf(this.gameMode);
+    const nextMode = modes[(currentIndex + 1) % modes.length];
+    const sel = document.getElementById('game-mode-select');
+    if (sel) {
+      sel.value = nextMode;
+      sel.dispatchEvent(new Event('change'));
+    }
+  }
+
+  // ── Player Rating Display ──
+
+  _initRatingDisplay() {
+    this._refreshRatingDisplay();
+  }
+
+  _refreshRatingDisplay() {
+    const el = document.getElementById('player-rating');
+    if (!el) return;
+    const data = getRating();
+    const rank = getRankTitle(data.rating);
+    el.innerHTML = `<span class="rating-icon">${rank.icon}</span><span class="rating-value" style="color:${rank.color}">${data.rating}</span><span class="rating-rank">${rank.title}</span>`;
+  }
+
+  // ── Achievement Panel ──
+
+  _initAchievementsPanel() {
+    const btn = document.getElementById('btn-achievements');
+    if (btn) {
+      btn.addEventListener('click', () => this._showAchievements());
+    }
+    this._updateAchievementCount();
+  }
+
+  _updateAchievementCount() {
+    const el = document.getElementById('achievement-count');
+    if (el) {
+      el.textContent = `${getUnlockedCount()}/${getTotalCount()}`;
+    }
+  }
+
+  _showAchievements() {
+    const all = getAllAchievements();
+    const categories = {};
+    for (const a of all) {
+      const cat = a.category || 'other';
+      if (!categories[cat]) categories[cat] = [];
+      categories[cat].push(a);
+    }
+
+    let html = '<div class="achievements-grid">';
+    const catNames = { milestones: '🏆 Milestones', streaks: '🔥 Streaks', difficulty: '⭐ Difficulty', special: '✨ Special', rating: '📈 Rating', learning: '📚 Learning' };
+    for (const [cat, items] of Object.entries(categories)) {
+      html += `<div class="achievement-category"><div class="achievement-cat-title">${catNames[cat] || cat}</div>`;
+      for (const a of items) {
+        const cls = a.unlocked ? 'unlocked' : 'locked';
+        html += `<div class="achievement-item ${cls}" title="${a.desc}">
+          <span class="achievement-icon">${a.icon}</span>
+          <div class="achievement-info">
+            <div class="achievement-title">${a.title}</div>
+            <div class="achievement-desc">${a.desc}</div>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
+    this._showModal('Achievements', html);
+  }
+
+  _showAchievementToast(achievement) {
+    const toast = document.createElement('div');
+    toast.className = 'achievement-toast';
+    toast.innerHTML = `<span class="toast-icon">${achievement.icon}</span><div><strong>Achievement Unlocked!</strong><br>${achievement.title}</div>`;
+    document.body.appendChild(toast);
+    sounds.playAchievement();
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 3500);
+  }
+
+  // ── Game History Panel ──
+
+  _initGameHistory() {
+    const btn = document.getElementById('btn-history');
+    if (btn) {
+      btn.addEventListener('click', () => this._showGameHistory());
+    }
+  }
+
+  _showGameHistory() {
+    const history = loadHistory();
+    if (history.length === 0) {
+      this._showModal('Game History', '<p style="color:var(--text-muted);text-align:center;padding:20px;">No games played yet. Complete a game to see it here!</p>');
+      return;
+    }
+
+    let html = '<div class="game-history-list">';
+    for (const game of history) {
+      const summary = formatGameSummary(game);
+      const resultClass = game.result === 'win' ? 'result-win' : game.result === 'loss' ? 'result-loss' : 'result-draw';
+      const changeStr = summary.ratingChange > 0 ? `+${summary.ratingChange}` : summary.ratingChange;
+      html += `<div class="history-item">
+        <div class="history-date">${summary.dateStr}</div>
+        <div class="history-result ${resultClass}">${summary.resultText}</div>
+        <div class="history-details">
+          ${summary.moves} moves · ${summary.difficulty}
+          ${summary.opening ? ` · ${summary.opening}` : ''}
+          ${summary.ratingChange ? ` · <span class="${summary.ratingChange > 0 ? 'text-green' : 'text-red'}">${changeStr}</span>` : ''}
+        </div>
+        <button class="btn secondary history-pgn-btn" data-game-id="${game.id}">📋 PGN</button>
+      </div>`;
+    }
+    html += '</div>';
+
+    this._showModal('Game History', html);
+
+    // Bind PGN copy buttons
+    setTimeout(() => {
+      document.querySelectorAll('.history-pgn-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const gameId = e.target.dataset.gameId;
+          const game = history.find(g => g.id === gameId);
+          if (game && game.moveHistory) {
+            const pgn = toPGN({
+              moveHistory: game.moveHistory,
+              result: game.status || game.result,
+              difficulty: game.difficulty,
+              opening: game.opening,
+              date: game.date,
+              white: game.playerColor === 'white' ? 'Player' : 'AI',
+              black: game.playerColor === 'black' ? 'Player' : 'AI',
+            });
+            copyPGN(pgn);
+            e.target.textContent = '✓ Copied';
+            setTimeout(() => { e.target.textContent = '📋 PGN'; }, 2000);
+          }
+        });
+      });
+    }, 100);
+  }
+
+  // ── PGN Export ──
+
+  _exportPGN() {
+    if (this.moveHistory.length === 0) return;
+    const pgn = toPGN({
+      moveHistory: this.moveHistory,
+      result: this.status,
+      difficulty: document.getElementById('difficulty-select').value,
+      opening: this._currentOpening ? this._currentOpening.name : null,
+      white: this.playerColor === 'white' ? 'Player' : 'AI',
+      black: this.playerColor === 'black' ? 'Player' : 'AI',
+    });
+    downloadPGN(pgn, `chess_${new Date().toISOString().slice(0, 10)}.pgn`);
+    sounds.playSelect();
+  }
+
+  // ── Game Review / Post-Mortem ──
+
+  async _reviewGame() {
+    // Use current game data, or fall back to last completed game
+    let fenLog = this._fenLog.length >= 2 ? this._fenLog : this._lastGameFenLog;
+    let moves = this._fenLog.length >= 2 ? this.moveHistory : this._lastGameMoveHistory;
+    if (!fenLog || fenLog.length < 2) {
+      this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;padding:20px;">Play a game first to review it.</p>');
+      return;
+    }
+
+    // Dismiss the game-over overlay if open
+    const overlay = document.getElementById('overlay');
+    if (overlay) overlay.style.display = 'none';
+
+    const reviewBtn = document.getElementById('btn-review');
+    const overlayReviewBtn = document.getElementById('overlay-review-btn');
+    if (reviewBtn) { reviewBtn.disabled = true; reviewBtn.textContent = 'Analyzing...'; }
+    if (overlayReviewBtn) { overlayReviewBtn.disabled = true; overlayReviewBtn.textContent = 'Analyzing...'; }
+
+    try {
+      const result = await this.api.reviewGame(fenLog, moves);
+      if (result) {
+        this._showReviewResults(result);
+      } else {
+        this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review unavailable. Make sure the AI service is running.</p>');
+      }
+    } catch (e) {
+      console.error('Review failed:', e);
+      this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review failed. Check console for details.</p>');
+    } finally {
+      if (reviewBtn) { reviewBtn.disabled = false; reviewBtn.textContent = '📊 Review'; }
+      if (overlayReviewBtn) { overlayReviewBtn.disabled = false; overlayReviewBtn.textContent = '📊 Review Game'; }
+    }
+  }
+
+  _showReviewResults(result) {
+    const classColors = {
+      brilliant: { color: '#00e5ff', label: '!!' },
+      good: { color: '#4ade80', label: '✓' },
+      book: { color: '#8888aa', label: '·' },
+      inaccuracy: { color: '#fbbf24', label: '?!' },
+      mistake: { color: '#f97316', label: '?' },
+      blunder: { color: '#ef4444', label: '??' },
+      game_over: { color: '#888', label: '' },
+    };
+
+    let html = `<div class="review-summary">
+      <div class="review-accuracy">${result.accuracy}%</div>
+      <div class="review-label">Accuracy</div>
+    </div>
+    <div class="review-moves">`;
+
+    for (let i = 0; i < result.evaluations.length; i++) {
+      const ev = result.evaluations[i];
+      const cls = classColors[ev.classification] || classColors.book;
+      const moveNum = Math.floor(i / 2) + 1;
+      const side = i % 2 === 0 ? 'W' : 'B';
+      html += `<div class="review-move" style="border-left: 3px solid ${cls.color}">
+        <span class="review-move-num">${moveNum}${side === 'W' ? '.' : '...'}</span>
+        <span class="review-move-san">${ev.move || ''}</span>
+        <span class="review-move-class" style="color:${cls.color}">${cls.label}</span>
+        <span class="review-eval">${ev.evaluation > 0 ? '+' : ''}${ev.evaluation.toFixed(2)}</span>
+      </div>`;
+    }
+    html += '</div>';
+
+    this._showModal('Game Review', html);
+  }
+
+  // ── Game End Handler (rating, achievements, save, learn) ──
+
+  _onGameEnd() {
+    // Signal AI learning
+    if (this.useAI) {
+      this.api.gameComplete(this.gameId, this.status, this.playerColor);
+    }
+
+    // Determine result
+    let result = 'draw';
+    let isCheckmate = false;
+    if (this.status.includes('Checkmate')) {
+      isCheckmate = true;
+      const winner = this.sideToMove === 'white' ? 'black' : 'white';
+      result = winner === this.playerColor ? 'win' : 'loss';
+    } else if (this.status.includes('Stalemate') || this.status.includes('Draw')) {
+      result = 'draw';
+    }
+
+    const difficulty = document.getElementById('difficulty-select').value;
+
+    // Update rating (skip in friendly mode)
+    let ratingResult = { change: 0, newRating: getRating().rating };
+    if (this.gameMode !== 'friendly') {
+      ratingResult = updateRating(result, difficulty);
+      this._refreshRatingDisplay();
+    }
+
+    // Play rating change sound
+    if (ratingResult.change > 0) sounds.playRatingUp();
+    else if (ratingResult.change < 0) sounds.playRatingDown();
+
+    // Check achievements
+    const newAchievements = checkAchievements({
+      gameCompleted: true,
+      result,
+      isCheckmate,
+      difficulty,
+      moveCount: this.moveHistory.length,
+      rating: ratingResult.newRating,
+      hadPromotion: this._hadPromotion,
+    });
+
+    // Show achievement toasts
+    for (const a of newAchievements) {
+      this._showAchievementToast(a);
+    }
+    this._updateAchievementCount();
+
+    // Save to game history
+    saveGame({
+      moveHistory: [...this.moveHistory],
+      status: this.status,
+      result,
+      difficulty,
+      playerColor: this.playerColor,
+      opening: this._currentOpening ? this._currentOpening.name : null,
+      moveCount: this.moveHistory.length,
+      ratingChange: ratingResult.change,
+      whiteTime: this.whiteTime,
+      blackTime: this.blackTime,
+    });
+
+    // Show rating change in overlay
+    const overlay = document.getElementById('overlay');
+    if (overlay) {
+      let ratingHtml = '';
+      if (ratingResult.change !== 0) {
+        const sign = ratingResult.change > 0 ? '+' : '';
+        const color = ratingResult.change > 0 ? '#4ade80' : '#ef4444';
+        ratingHtml = `<div class="overlay-rating" style="color:${color};font-size:1.1rem;margin-top:8px;">${sign}${ratingResult.change} Rating (${ratingResult.newRating})</div>`;
+      }
+      const msg = document.getElementById('overlay-message');
+      if (msg) msg.insertAdjacentHTML('afterend', ratingHtml);
+    }
+  }
+
+  // ── Pre-move System ──
+
+  _handlePreMoveClick(sq) {
+    if (!this._preMoveSelectedSquare) {
+      // Select piece for pre-move
+      const piece = this.pieces.find(p => p.square === sq);
+      if (piece && piece.color === this.playerColor) {
+        this._preMoveSelectedSquare = sq;
+        this.board.highlightSquare(sq, 0x9966ff, 0.4, true);
+        sounds.playSelect();
+      }
+    } else {
+      // Complete pre-move
+      const uci = this._preMoveSelectedSquare + sq;
+      this._preMove = { from: this._preMoveSelectedSquare, to: sq, uci };
+      this.board.clearHighlights();
+      this.board.highlightSquare(this._preMoveSelectedSquare, 0x9966ff, 0.3);
+      this.board.highlightSquare(sq, 0x9966ff, 0.3);
+      if (this.lastMoveFrom && this.lastMoveTo) {
+        this.board.highlightLastMove(this.lastMoveFrom, this.lastMoveTo);
+      }
+      this._preMoveSelectedSquare = null;
+      const indicator = document.getElementById('premove-indicator');
+      if (indicator) indicator.style.display = 'block';
+    }
+  }
+
+  _clearPreMove() {
+    this._preMove = null;
+    this._preMoveSelectedSquare = null;
+    const indicator = document.getElementById('premove-indicator');
+    if (indicator) indicator.style.display = 'none';
+  }
+
+  async _executePreMove() {
+    if (!this._preMove) return;
+    const pm = this._preMove;
+    this._clearPreMove();
+
+    // Check if the pre-move is legal
+    const promoResult = this._checkPromotion(pm.from, pm.to, pm.uci);
+    let moveUci = pm.uci;
+    if (promoResult instanceof Promise) {
+      moveUci = await promoResult;
+    } else if (promoResult) {
+      moveUci = promoResult;
+    }
+
+    if (this.legalMoves.includes(moveUci)) {
+      await this._makeMove(moveUci);
+    } else {
+      sounds.playIllegal();
+    }
+  }
+
+  // ── Puzzle Mode ──
+
+  _initPuzzlePanel() {
+    const btn = document.getElementById('btn-puzzles');
+    if (btn) btn.addEventListener('click', () => this._showPuzzleBrowser());
+  }
+
+  async _showPuzzleBrowser() {
+    let puzzles = await this.api.getPuzzles(0, 3000, null, 20);
+
+    // Fallback: built-in puzzle data when API is unavailable
+    if (!puzzles || !puzzles.puzzles) {
+      puzzles = { puzzles: this._getLocalPuzzles() };
+    }
+
+    if (!puzzles.puzzles || puzzles.puzzles.length === 0) {
+      this._showModal('Puzzles', '<p style="color:var(--text-muted);text-align:center;padding:20px;">No puzzles available. Make sure the AI service is running for the full puzzle library.</p>');
+      return;
+    }
+
+    let themes = [];
+    try {
+      const t = await fetch('/api/ai/ai/puzzles/themes/list');
+      if (t.ok) themes = (await t.json()).themes || [];
+    } catch (e) {}
+
+    let html = '<div class="puzzle-container">';
+    html += '<div class="puzzle-filter-row">';
+    html += '<select id="puzzle-theme-filter"><option value="">All Themes</option>';
+    for (const th of themes) html += `<option value="${th}">${th.charAt(0).toUpperCase() + th.slice(1)}</option>`;
+    html += '</select></div>';
+    html += '<div class="puzzle-list" id="puzzle-list-container">';
+
+    for (const p of puzzles.puzzles) {
+      const solved = this._solvedPuzzles.includes(p.id);
+      html += `<div class="puzzle-item ${solved ? 'solved' : ''}" data-puzzle-id="${p.id}">
+        <span class="puzzle-icon">🧩</span>
+        <div>
+          <div class="puzzle-name">${p.title}</div>
+          <div class="puzzle-meta">Rating: ${p.rating} · ${(p.themes || (p.theme ? [p.theme] : [])).map(t => `<span class="puzzle-theme-tag">${t}</span>`).join(' ')}</div>
+        </div>
+        ${solved ? '<span class="puzzle-solved-badge">✓ Solved</span>' : ''}
+      </div>`;
+    }
+    html += '</div></div>';
+
+    this._showModal('Puzzles', html);
+
+    setTimeout(() => {
+      document.querySelectorAll('.puzzle-item').forEach(el => {
+        el.addEventListener('click', () => this._startPuzzle(el.dataset.puzzleId));
+      });
+      const filter = document.getElementById('puzzle-theme-filter');
+      if (filter) {
+        filter.addEventListener('change', async () => {
+          const theme = filter.value || null;
+          const filtered = await this.api.getPuzzles(0, 3000, theme, 20);
+          if (filtered && filtered.puzzles) {
+            const container = document.getElementById('puzzle-list-container');
+            if (container) {
+              container.innerHTML = filtered.puzzles.map(p => {
+                const solved = this._solvedPuzzles.includes(p.id);
+                return `<div class="puzzle-item ${solved ? 'solved' : ''}" data-puzzle-id="${p.id}">
+                  <span class="puzzle-icon">🧩</span>
+                  <div>
+                    <div class="puzzle-name">${p.title}</div>
+                    <div class="puzzle-meta">Rating: ${p.rating} · ${(p.themes || (p.theme ? [p.theme] : [])).map(t => `<span class="puzzle-theme-tag">${t}</span>`).join(' ')}</div>
+                  </div>
+                  ${solved ? '<span class="puzzle-solved-badge">✓ Solved</span>' : ''}
+                </div>`;
+              }).join('');
+              container.querySelectorAll('.puzzle-item').forEach(el => {
+                el.addEventListener('click', () => this._startPuzzle(el.dataset.puzzleId));
+              });
+            }
+          }
+        });
+      }
+    }, 100);
+  }
+
+  async _startPuzzle(puzzleId) {
+    // Close modal
+    const existing = document.getElementById('feature-modal');
+    if (existing) existing.remove();
+
+    try {
+      // Try API first, fall back to local data
+      let puzzle = null;
+      try {
+        const resp = await fetch(`/api/ai/ai/puzzles/${puzzleId}`);
+        if (resp.ok) puzzle = await resp.json();
+      } catch (e) {
+        console.warn('Puzzle API unavailable, using local data');
+      }
+
+      // Fallback to local puzzle data
+      if (!puzzle) {
+        puzzle = this._getLocalPuzzles().find(p => p.id === puzzleId);
+      }
+      if (!puzzle) return;
+
+      this._puzzleMode = true;
+      this._currentPuzzle = puzzle;
+      this._puzzleMoveIndex = 0;
+      this._savedUseAI = this.useAI;
+      this.useAI = false; // Disable AI auto-response during puzzles
+
+      // Load the puzzle FEN position
+      const data = await this.api.newGame(puzzle.fen);
+      this.gameId = data.game_id;
+      this.fen = data.fen;
+      this.pieces = data.pieces;
+      this.legalMoves = data.legal_moves;
+      this.sideToMove = puzzle.fen.includes(' w ') ? 'white' : 'black';
+      this.playerColor = this.sideToMove;
+      this.status = 'Active';
+      this.moveHistory = [];
+
+      this.board.clearHighlights();
+      this.board.setPieces(this.pieces);
+      this._updateUI();
+
+      // Show puzzle info in coach panel
+      const coachEl = document.getElementById('tutor-coach-content');
+      if (coachEl) {
+        coachEl.innerHTML = `
+          <div class="tutor-tip"><span class="tutor-tag gold">🧩 PUZZLE</span> <strong>${puzzle.title}</strong></div>
+          <div class="tutor-tip">${puzzle.description || 'Find the best move!'}</div>
+          <div class="tutor-tip" style="font-size:0.7rem;color:var(--text-muted);">Rating: ${puzzle.rating} · Theme: ${puzzle.theme || 'general'}</div>
+        `;
+      }
+      // Open coach panel
+      const tutorPanel = document.getElementById('tutor-panel');
+      if (tutorPanel) tutorPanel.classList.remove('minimized');
+
+      // Show puzzle info bar
+      this._showPuzzleStatus(`🧩 ${puzzle.title} — Find the best move!`, 'info');
+    } catch (e) {
+      console.error('Failed to start puzzle:', e);
+    }
+  }
+
+  _showPuzzleStatus(text, type) {
+    // Remove existing
+    const existing = document.getElementById('puzzle-status-bar');
+    if (existing) existing.remove();
+
+    const bar = document.createElement('div');
+    bar.id = 'puzzle-status-bar';
+    bar.className = `puzzle-status ${type}`;
+    bar.textContent = text;
+    bar.style.position = 'absolute';
+    bar.style.top = '16px';
+    bar.style.left = '16px';
+    bar.style.zIndex = '60';
+    bar.style.minWidth = '200px';
+    bar.style.maxWidth = 'calc(100% - 400px)';
+    document.getElementById('canvas-container').appendChild(bar);
+
+    if (type === 'correct' || type === 'wrong') {
+      setTimeout(() => bar.remove(), 3000);
+    }
+  }
+
+  async _checkPuzzleMove(uci) {
+    if (!this._currentPuzzle) return false;
+
+    try {
+      // Try API first
+      let result = await this.api.checkPuzzleMove(
+        this._currentPuzzle.id,
+        this._puzzleMoveIndex,
+        uci
+      );
+
+      // Fallback: check locally if API is unavailable
+      if (!result && this._currentPuzzle._solution) {
+        const solution = this._currentPuzzle._solution;
+        const correct = this._puzzleMoveIndex < solution.length && uci === solution[this._puzzleMoveIndex];
+        const isComplete = correct && this._puzzleMoveIndex === solution.length - 1;
+        let nextMove = null;
+        if (correct && !isComplete && this._puzzleMoveIndex + 1 < solution.length) {
+          nextMove = solution[this._puzzleMoveIndex + 1];
+        }
+        result = { correct, completed: isComplete, next_move: nextMove };
+      }
+
+      if (!result) {
+        this._showPuzzleStatus('Could not check move — service unavailable', 'wrong');
+        return false;
+      }
+
+      if (result && result.correct) {
+        this._puzzleMoveIndex++;
+        sounds.playPuzzleCorrect();
+
+        if (result.completed) {
+          this._showPuzzleStatus('✅ Puzzle Solved! Excellent!', 'correct');
+          if (!this._solvedPuzzles.includes(this._currentPuzzle.id)) {
+            this._solvedPuzzles.push(this._currentPuzzle.id);
+            localStorage.setItem('chess_solved_puzzles', JSON.stringify(this._solvedPuzzles));
+          }
+          this._puzzleMode = false;
+          this._currentPuzzle = null;
+          // Restore AI setting
+          if (this._savedUseAI !== undefined) {
+            this.useAI = this._savedUseAI;
+            delete this._savedUseAI;
+          }
+
+          // Show congratulations in coach
+          const coachEl = document.getElementById('tutor-coach-content');
+          if (coachEl) {
+            coachEl.innerHTML += `<div class="tutor-tip"><span class="tutor-tag success">✅ SOLVED</span> Great work! Click 🧩 Puzzles to try another one.</div>`;
+          }
+        } else if (result.next_move) {
+          this._showPuzzleStatus('✓ Correct! Opponent responds...', 'correct');
+          // Opponent's reply
+          setTimeout(async () => {
+            await this._makeMove(result.next_move);
+            this._puzzleMoveIndex++;
+            this._showPuzzleStatus('Your turn — find the next move!', 'info');
+          }, 800);
+        }
+        return true;
+      } else {
+        sounds.playPuzzleWrong();
+        this._showPuzzleStatus('✗ Not the best move. Try again!', 'wrong');
+        return false;
+      }
+    } catch (e) {
+      console.error('Puzzle check failed:', e);
+      return false;
+    }
+  }
+
+  // ── Local Puzzle Fallback (when API is unavailable) ──
+
+  _getLocalPuzzles() {
+    return [
+      { id: 'p001', title: "Scholar's Mate", rating: 800, theme: 'checkmate',
+        description: 'White can deliver checkmate in one move!',
+        fen: 'r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4',
+        _solution: ['h5f7'] },
+      { id: 'p002', title: 'Free Pawn', rating: 800, theme: 'capture',
+        description: 'Capture the undefended pawn in the center.',
+        fen: 'rnbqkbnr/ppp2ppp/8/3pp3/4P3/3B4/PPPP1PPP/RNBQK1NR w KQkq d6 0 3',
+        _solution: ['e4d5'] },
+      { id: 'p003', title: 'Undefended Pawn', rating: 850, theme: 'tactics',
+        description: 'The e5 pawn is only defended by the queen. Win material!',
+        fen: 'rnb1kbnr/ppppqppp/8/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 2 3',
+        _solution: ['f3e5'] },
+      { id: 'p005', title: "Fool's Mate", rating: 850, theme: 'checkmate',
+        description: "Punish White's weak king position with checkmate!",
+        fen: 'rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq g3 0 2',
+        _solution: ['d8h4'] },
+      { id: 'p004', title: 'Knight Attack', rating: 900, theme: 'attack',
+        description: 'Attack the weak f7 square with your knight!',
+        fen: 'r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4',
+        _solution: ['f3g5'] },
+      { id: 'p006', title: 'Bishop Sacrifice on f7', rating: 1200, theme: 'sacrifice',
+        description: 'Sacrifice the bishop to expose the king, then attack!',
+        fen: 'r2qk2r/ppp2ppp/2np1n2/2b1p1B1/2B1P1b1/3P1N2/PPP2PPP/RN1QK2R w KQkq - 2 6',
+        _solution: ['c4f7', 'e8f7', 'f3g5'] },
+      { id: 'p015', title: 'Castle Now!', rating: 1200, theme: 'safety',
+        description: 'Secure your king before launching an attack.',
+        fen: 'r1bq1rk1/pppn1ppp/4p3/3pP3/1b1P4/2NB1N2/PPP2PPP/R1BQK2R w KQ - 2 7',
+        _solution: ['e1g1'] },
+      { id: 'p010', title: 'Opening Trap', rating: 1250, theme: 'opening_trap',
+        description: 'Recapture to get a strong attacking position.',
+        fen: 'rnbq1rk1/pp3ppp/4pn2/3p4/1bPP4/2N1PN2/PP3PPP/R1BQKB1R w KQ - 2 6',
+        _solution: ['c4d5', 'e6d5', 'f1d3'] },
+    ];
+  }
+
+  // ── Stats Dashboard ──
+
+  _initStatsPanel() {
+    const btn = document.getElementById('btn-stats');
+    if (btn) btn.addEventListener('click', () => this._showStats());
+  }
+
+  _showStats() {
+    const history = loadHistory();
+    const rating = getRating();
+    const ratingHistory = typeof getRating === 'function' ? [] : [];
+
+    // Compute stats
+    const total = history.length;
+    const wins = history.filter(g => g.result === 'win').length;
+    const losses = history.filter(g => g.result === 'loss').length;
+    const draws = total - wins - losses;
+    const winRate = total > 0 ? Math.round(wins / total * 100) : 0;
+
+    // Streaks
+    let currentStreak = 0, bestStreak = 0, streak = 0;
+    for (const g of history) {
+      if (g.result === 'win') { streak++; bestStreak = Math.max(bestStreak, streak); }
+      else { streak = 0; }
+    }
+    currentStreak = streak;
+
+    // Avg moves
+    const avgMoves = total > 0 ? Math.round(history.reduce((s, g) => s + (g.moveCount || 0), 0) / total) : 0;
+
+    // Opening stats
+    const openingCounts = {};
+    for (const g of history) {
+      if (g.opening) {
+        openingCounts[g.opening] = (openingCounts[g.opening] || 0) + 1;
+      }
+    }
+    const topOpenings = Object.entries(openingCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+
+    // By difficulty
+    const byDiff = {};
+    for (const g of history) {
+      const d = g.difficulty || 'unknown';
+      if (!byDiff[d]) byDiff[d] = { wins: 0, total: 0 };
+      byDiff[d].total++;
+      if (g.result === 'win') byDiff[d].wins++;
+    }
+
+    // Build HTML
+    let html = '<div class="stats-grid">';
+    html += `<div class="stat-card"><div class="stat-value" style="color:var(--accent-cyan);">${total}</div><div class="stat-label">Games Played</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="color:var(--accent-gold);">${rating.rating}</div><div class="stat-label">Current Rating</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="color:#4ade80;">${winRate}%</div><div class="stat-label">Win Rate</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="color:var(--accent-secondary);">${bestStreak}</div><div class="stat-label">Best Streak</div></div>`;
+    html += '</div>';
+
+    // Win/Loss/Draw bars
+    html += '<div class="stat-section-title">Results Breakdown</div>';
+    const makeBar = (label, value, max, color) => {
+      const pct = max > 0 ? Math.round(value / max * 100) : 0;
+      return `<div class="stat-bar-row">
+        <span class="stat-bar-label">${label}</span>
+        <div class="stat-bar-track"><div class="stat-bar-fill" style="width:${pct}%;background:${color};"></div></div>
+        <span style="font-size:0.72rem;color:var(--text-secondary);width:40px;text-align:right;">${value}</span>
+      </div>`;
+    };
+    html += makeBar('Wins', wins, total, '#4ade80');
+    html += makeBar('Losses', losses, total, '#ef4444');
+    html += makeBar('Draws', draws, total, '#fbbf24');
+
+    // By difficulty
+    if (Object.keys(byDiff).length > 0) {
+      html += '<div class="stat-section-title">By Difficulty</div>';
+      for (const [diff, data] of Object.entries(byDiff)) {
+        const wr = Math.round(data.wins / data.total * 100);
+        html += makeBar(diff.charAt(0).toUpperCase() + diff.slice(1), data.wins, data.total, 'var(--accent-primary)');
+      }
+    }
+
+    // Top openings
+    if (topOpenings.length > 0) {
+      html += '<div class="stat-section-title">Favorite Openings</div>';
+      for (const [name, count] of topOpenings) {
+        html += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.78rem;">
+          <span style="color:var(--text-primary);">${name}</span>
+          <span style="color:var(--text-muted);">${count} games</span>
+        </div>`;
+      }
+    }
+
+    // More stats
+    html += '<div class="stat-section-title">More</div>';
+    html += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.78rem;">
+      <span style="color:var(--text-secondary);">Avg. Game Length</span>
+      <span style="color:var(--text-primary);">${avgMoves} moves</span>
+    </div>`;
+    html += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.78rem;">
+      <span style="color:var(--text-secondary);">Current Streak</span>
+      <span style="color:var(--text-primary);">${currentStreak} wins</span>
+    </div>`;
+    html += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.78rem;">
+      <span style="color:var(--text-secondary);">Puzzles Solved</span>
+      <span style="color:var(--text-primary);">${this._solvedPuzzles.length}</span>
+    </div>`;
+    html += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.78rem;">
+      <span style="color:var(--text-secondary);">Achievements</span>
+      <span style="color:var(--text-primary);">${getUnlockedCount()}/${getTotalCount()}</span>
+    </div>`;
+
+    this._showModal('Statistics', html);
+  }
+
+  // ── Clock Countdown Modes ──
+
+  _initClockModes() {
+    const container = document.getElementById('clock-modes');
+    if (!container) return;
+
+    container.querySelectorAll('.clock-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        container.querySelectorAll('.clock-mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this._clockMode = btn.dataset.mode;
+        if (this._clockMode === 'elapsed') {
+          this._clockInitialTime = 0;
+        } else {
+          this._clockInitialTime = parseInt(this._clockMode) * 60;
+        }
+        sounds.playSelect();
+        // Apply to current game if just starting
+        if (this.moveHistory.length === 0) {
+          this._resetClockForMode();
+        }
+      });
+    });
+  }
+
+  _resetClockForMode() {
+    if (this._clockMode === 'elapsed') {
+      this.whiteTime = 0;
+      this.blackTime = 0;
+    } else {
+      this.whiteTime = this._clockInitialTime;
+      this.blackTime = this._clockInitialTime;
+    }
+    this._updateTimerDisplay();
+  }
+
+  // ── Drag and Drop ──
+
+  _initDragAndDrop() {
+    const canvas = this.board.canvas;
+
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.shiftKey || e.altKey) return;
+      if (this.thinking || this.status !== 'Active') return;
+
+      const sq = this.board.getSquareAtScreen(e.clientX, e.clientY);
+      if (!sq) return;
+
+      // Only start drag on own pieces
+      if (this._isOwnPiece(sq) && this._isPlayerTurn()) {
+        this._dragging = true;
+        this._dragPieceSq = sq;
+        this.selectedSquare = sq;
+        this.board.highlightLegalMoves(this.legalMoves, sq);
+        // Lift the piece
+        if (this.board.liftPiece) this.board.liftPiece(sq);
+      }
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!this._dragging || !this._dragPieceSq) return;
+      // Follow cursor
+      if (this.board.dragPiece) {
+        this.board.dragPiece(this._dragPieceSq, e.clientX, e.clientY);
+      }
+    });
+
+    canvas.addEventListener('pointerup', async (e) => {
+      if (!this._dragging || !this._dragPieceSq) return;
+      this._dragging = false;
+
+      const dropSq = this.board.getSquareAtScreen(e.clientX, e.clientY);
+      if (this.board.dropPiece) this.board.dropPiece(this._dragPieceSq);
+
+      if (dropSq && dropSq !== this._dragPieceSq) {
+        const uci = this._dragPieceSq + dropSq;
+        const promoResult = this._checkPromotion(this._dragPieceSq, dropSq, uci);
+
+        if (promoResult instanceof Promise) {
+          const promoUci = await promoResult;
+          if (this.legalMoves.includes(promoUci)) {
+            this._makeMove(promoUci);
+          }
+        } else {
+          const promoUci = promoResult;
+          if (this.legalMoves.includes(promoUci || uci)) {
+            this._makeMove(promoUci || uci);
+          }
+        }
+      }
+
+      this._dragPieceSq = null;
+      this.selectedSquare = null;
+    });
+  }
+
+  // ── Animated NN Eval Bar ──
+
+  async _updateNNEval() {
+    // Non-blocking NN evaluation after each move
+    if (!this.fen) return;
+    try {
+      const resp = await fetch('/api/ai/ai/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fen: this.fen, num_simulations: 50 }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && typeof data.value === 'number') {
+          const evalScore = data.value;
+          // Convert NN output (-1 to 1) to percentage (5 to 95)
+          const pct = Math.max(5, Math.min(95, 50 + evalScore * 45));
+          const evalBar = document.getElementById('eval-bar');
+          const evalText = document.getElementById('eval-text');
+          if (evalBar) evalBar.style.width = `${pct}%`;
+          if (evalText) {
+            const sign = evalScore > 0 ? '+' : '';
+            evalText.textContent = `${sign}${evalScore.toFixed(2)}`;
+          }
+        }
+      }
+    } catch (e) {
+      // NN eval unavailable, keep material count  
+    }
+  }
+
+  // ── Modal Helper ──
+
+  _showModal(title, content) {
+    // Remove existing modal
+    const existing = document.getElementById('feature-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'feature-modal';
+    modal.className = 'feature-modal-overlay';
+    modal.innerHTML = `
+      <div class="feature-modal">
+        <div class="feature-modal-header">
+          <h3>${title}</h3>
+          <button class="feature-modal-close">&times;</button>
+        </div>
+        <div class="feature-modal-body">${content}</div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    modal.querySelector('.feature-modal-close').addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
   }
 
   async _pollLearningStatus() {
@@ -911,19 +2375,64 @@ class ChessGame {
 
       const whiteEl = document.createElement('span');
       whiteEl.className = 'move-white';
-      whiteEl.textContent = this.moveHistory[i] || '';
+      whiteEl.innerHTML = this._moveWithBadge(this.moveHistory[i], i);
       row.appendChild(whiteEl);
 
       if (i + 1 < this.moveHistory.length) {
         const blackEl = document.createElement('span');
         blackEl.className = 'move-black';
-        blackEl.textContent = this.moveHistory[i + 1];
+        blackEl.innerHTML = this._moveWithBadge(this.moveHistory[i + 1], i + 1);
         row.appendChild(blackEl);
       }
 
       container.appendChild(row);
     }
     container.scrollTop = container.scrollHeight;
+  }
+
+  // Rate a move for display quality badge
+  _moveWithBadge(san, index) {
+    if (!san) return '';
+    const quality = this._getMoveQuality(san, index);
+    const escaped = san.replace(/</g, '&lt;');
+    if (!quality) return escaped;
+    return `${escaped} <span class="move-quality ${quality.cls}" title="${quality.label}">${quality.symbol}</span>`;
+  }
+
+  _getMoveQuality(san, index) {
+    if (!san) return null;
+
+    // Checkmate is always brilliant
+    if (san.includes('#')) return { cls: 'brilliant', symbol: '!!', label: 'Brilliant — Checkmate!' };
+
+    // Check + capture is great
+    if (san.includes('+') && san.includes('x')) return { cls: 'great', symbol: '!', label: 'Great move' };
+
+    // Queen sacrifice (captured piece after moving queen, losing position) 
+    // Approximate: if we have move quality data from engine eval, use it
+    if (this._moveQualities && this._moveQualities[index]) {
+      return this._moveQualities[index];
+    }
+
+    // Heuristic classification from SAN
+    const isCapture = san.includes('x');
+    const isCheck = san.includes('+');
+    const isCastle = san.startsWith('O-');
+    const isPromotion = san.includes('=');
+
+    if (isPromotion && isCheck) return { cls: 'brilliant', symbol: '!!', label: 'Brilliant' };
+    if (isPromotion) return { cls: 'great', symbol: '!', label: 'Great' };
+    if (isCastle) return { cls: 'good', symbol: '✓', label: 'Good — King safety' };
+    if (isCheck) return { cls: 'good', symbol: '✓', label: 'Good — Check' };
+
+    // Only show badges for notable moves (not every move)
+    return null;
+  }
+
+  // Store engine-evaluated move qualities (populated during game review)
+  setMoveQuality(index, quality) {
+    if (!this._moveQualities) this._moveQualities = {};
+    this._moveQualities[index] = quality;
   }
 
   _updateCaptured() {
@@ -934,6 +2443,76 @@ class ChessGame {
       sort(this.capturedWhite).map((p) => PIECE_UNICODE[p] || p).join(' ');
     document.getElementById('captured-black').textContent =
       sort(this.capturedBlack).map((p) => PIECE_UNICODE[p] || p).join(' ');
+
+    // Update player info bars on canvas
+    this._updatePlayerBars();
+  }
+
+  _updatePlayerBars() {
+    const pieceValues = { king: 0, queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1, King: 0, Queen: 9, Rook: 5, Bishop: 3, Knight: 3, Pawn: 1 };
+    const sort = (arr) => [...arr].sort((a, b) => (pieceValues[b] || 0) - (pieceValues[a] || 0));
+
+    // Calculate material advantage
+    let whiteMatVal = 0, blackMatVal = 0;
+    for (const p of this.pieces) {
+      const v = pieceValues[p.piece_type] || 0;
+      if (p.color === 'white') whiteMatVal += v;
+      else blackMatVal += v;
+    }
+    const diff = whiteMatVal - blackMatVal;
+
+    // Determine which bar is which player
+    const isPlayerWhite = this.playerColor === 'white';
+    const topColor = isPlayerWhite ? 'black' : 'white';
+    const bottomColor = isPlayerWhite ? 'white' : 'black';
+
+    // Top bar = opponent
+    const topName = document.getElementById('pb-top-name');
+    const topCaptures = document.getElementById('pb-top-captures');
+    const topAdv = document.getElementById('pb-top-advantage');
+    const topClock = document.getElementById('pb-top-clock');
+    const topAvatar = document.getElementById('pb-top-avatar');
+    const topBar = document.getElementById('player-bar-top');
+
+    // Bottom bar = player
+    const bottomName = document.getElementById('pb-bottom-name');
+    const bottomCaptures = document.getElementById('pb-bottom-captures');
+    const bottomAdv = document.getElementById('pb-bottom-advantage');
+    const bottomClock = document.getElementById('pb-bottom-clock');
+    const bottomAvatar = document.getElementById('pb-bottom-avatar');
+    const bottomBar = document.getElementById('player-bar-bottom');
+
+    if (topName) topName.textContent = this.useAI ? 'AI Engine' : 'Opponent';
+    if (bottomName) bottomName.textContent = 'You';
+    if (topAvatar) topAvatar.textContent = topColor === 'black' ? '♚' : '♔';
+    if (bottomAvatar) bottomAvatar.textContent = bottomColor === 'white' ? '♔' : '♚';
+
+    // Captured pieces for each bar
+    const topCapturedPieces = topColor === 'black' ? this.capturedWhite : this.capturedBlack;
+    const bottomCapturedPieces = bottomColor === 'white' ? this.capturedBlack : this.capturedWhite;
+    if (topCaptures) topCaptures.textContent = sort(topCapturedPieces).map(p => PIECE_UNICODE[p] || p).join('');
+    if (bottomCaptures) bottomCaptures.textContent = sort(bottomCapturedPieces).map(p => PIECE_UNICODE[p] || p).join('');
+
+    // Material advantage
+    const topAdvantagePts = topColor === 'white' ? diff : -diff;
+    const bottomAdvantagePts = bottomColor === 'white' ? diff : -diff;
+    if (topAdv) topAdv.textContent = topAdvantagePts > 0 ? `+${topAdvantagePts}` : '';
+    if (bottomAdv) bottomAdv.textContent = bottomAdvantagePts > 0 ? `+${bottomAdvantagePts}` : '';
+
+    // Active turn indicator
+    if (topBar) topBar.classList.toggle('active-turn', this.sideToMove === topColor);
+    if (bottomBar) bottomBar.classList.toggle('active-turn', this.sideToMove === bottomColor);
+
+    // Clocks
+    const formatTime = (s) => {
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return `${m}:${sec.toString().padStart(2, '0')}`;
+    };
+    const topTime = topColor === 'white' ? this.whiteTime : this.blackTime;
+    const bottomTime = bottomColor === 'white' ? this.whiteTime : this.blackTime;
+    if (topClock) topClock.textContent = formatTime(topTime);
+    if (bottomClock) bottomClock.textContent = formatTime(bottomTime);
   }
 
   _updateEvalBar() {
@@ -980,8 +2559,21 @@ class ChessGame {
     overlay.style.display = 'block';
     sounds.playGameOver(isWin);
 
-    // Confetti for wins or any checkmate
+    // Add mode-specific message
+    if (this.gameMode === 'friendly') {
+      msg.textContent += ' — Friendly match (no rating change)';
+    } else if (this.gameMode === 'training') {
+      msg.textContent += ' — Review the coach tips above to learn from this game!';
+    }
+
+    // Enable review button
+    const reviewBtn = document.getElementById('btn-review');
+    if (reviewBtn) reviewBtn.disabled = false;
+
+    // Confetti for wins or any checkmate — dramatic camera zoom first
     if (isWin || this.status.includes('Checkmate')) {
+      this.board.triggerCheckmateZoom();
+    } else if (this.status.includes('Stalemate') || this.status.includes('Draw')) {
       this.board.triggerConfetti();
     }
   }
@@ -1005,10 +2597,34 @@ class ChessGame {
         return;
       }
 
-      if (this.sideToMove === 'white') {
-        this.whiteTime += elapsed;
+      if (this._clockMode === 'elapsed') {
+        // Count up
+        if (this.sideToMove === 'white') {
+          this.whiteTime += elapsed;
+        } else {
+          this.blackTime += elapsed;
+        }
       } else {
-        this.blackTime += elapsed;
+        // Count down
+        if (this.sideToMove === 'white') {
+          this.whiteTime = Math.max(0, this.whiteTime - elapsed);
+          if (this.whiteTime <= 0) {
+            this._stopTimer();
+            this.status = 'White lost on time';
+            this._showGameOver();
+            this._onGameEnd();
+            return;
+          }
+        } else {
+          this.blackTime = Math.max(0, this.blackTime - elapsed);
+          if (this.blackTime <= 0) {
+            this._stopTimer();
+            this.status = 'Black lost on time';
+            this._showGameOver();
+            this._onGameEnd();
+            return;
+          }
+        }
       }
       this._updateTimerDisplay();
     }, 100);
@@ -1035,11 +2651,29 @@ class ChessGame {
     // Highlight active timer
     const whiteRow = document.getElementById('timer-white-row');
     const blackRow = document.getElementById('timer-black-row');
-    if (whiteRow) whiteRow.classList.toggle('active', this.sideToMove === 'white' && this.status === 'Active');
-    if (blackRow) blackRow.classList.toggle('active', this.sideToMove === 'black' && this.status === 'Active');
+    if (whiteRow) {
+      whiteRow.classList.toggle('active', this.sideToMove === 'white' && this.status === 'Active');
+      whiteRow.classList.toggle('time-warning', this._clockMode !== 'elapsed' && this.whiteTime < 30);
+    }
+    if (blackRow) {
+      blackRow.classList.toggle('active', this.sideToMove === 'black' && this.status === 'Active');
+      blackRow.classList.toggle('time-warning', this._clockMode !== 'elapsed' && this.blackTime < 30);
+    }
+
+    // Sync player bar clocks
+    const topClock = document.querySelector('.top-bar .pb-clock');
+    const botClock = document.querySelector('.bottom-bar .pb-clock');
+    if (topClock && botClock) {
+      const playerIsWhite = this.playerColor === 'white';
+      topClock.textContent = fmt(playerIsWhite ? this.blackTime : this.whiteTime);
+      botClock.textContent = fmt(playerIsWhite ? this.whiteTime : this.blackTime);
+    }
   }
 }
 
 // ---- Bootstrap ----
-const game = new ChessGame();
-window.game = game;
+(async () => {
+  await initBridge();
+  const game = new ChessGame();
+  window.game = game;
+})();

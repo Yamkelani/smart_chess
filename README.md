@@ -122,6 +122,62 @@ Training data and model checkpoints are saved to `ai-service/training_data/` and
 | GET | `/ai/status` | Model/training status |
 | GET | `/ai/difficulties` | List difficulty levels |
 
+## Native App Builds (Tauri v2)
+
+The frontend can be built as a native desktop/mobile app using Tauri v2. The chess engine is embedded directly — no server needed for local play. AI features require a reachable AI service endpoint.
+
+### Windows
+
+**Prerequisites:** Rust 1.70+, Node.js 18+, Visual Studio Build Tools 2022 (with C++ workload)
+
+```bash
+cd frontend
+npm install
+npx tauri build
+# Output: src-tauri/target/release/bundle/msi/*.msi
+#         src-tauri/target/release/bundle/nsis/*.exe
+```
+
+### Android
+
+**Prerequisites:** Rust 1.70+, Node.js 18+, JDK 21, Android SDK (API 34), NDK 27
+
+```bash
+# Set environment
+export ANDROID_HOME=$HOME/Android/Sdk
+export NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
+export JAVA_HOME=/path/to/jdk-21
+
+# Add Rust Android targets
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+# Init and build
+cd frontend
+npm install
+npx tauri android init
+npx tauri android build --apk
+# Output: src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+```
+
+To sign the APK for distribution, use `apksigner` or upload to Google Play Console.
+
+### iOS (requires macOS)
+
+**Prerequisites:** macOS with Xcode 15+, Rust 1.70+, Node.js 18+, CocoaPods
+
+```bash
+# Add Rust iOS targets
+rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
+
+cd frontend
+npm install
+npx tauri ios init
+npx tauri ios build
+# Output: src-tauri/gen/apple/build/.../*.ipa
+```
+
+> **Note:** iOS builds can only be performed on macOS with Xcode installed.
+
 ## Project Structure
 
 ```

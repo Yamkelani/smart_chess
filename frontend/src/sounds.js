@@ -238,6 +238,116 @@ class ChessSounds {
     osc.stop(t + 0.3);
   }
 
+  /** Achievement unlock — magical chime with sparkle */
+  playAchievement() {
+    if (!this.enabled || !this._ensureContext()) return;
+    const t = this.ctx.currentTime;
+
+    // Sparkle arpeggio — C6 E6 G6 C7
+    const notes = [1047, 1319, 1568, 2093];
+    notes.forEach((freq, i) => {
+      const start = t + i * 0.08;
+      const g = this._gain(this.volume * 0.3);
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(this.volume * 0.3, start + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.3);
+
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      osc.connect(g);
+      osc.start(start);
+      osc.stop(start + 0.3);
+    });
+
+    // Shimmer overlay
+    const shimG = this._gain(this.volume * 0.1);
+    shimG.gain.setValueAtTime(this.volume * 0.1, t + 0.1);
+    shimG.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    const shimOsc = this.ctx.createOscillator();
+    shimOsc.type = 'triangle';
+    shimOsc.frequency.setValueAtTime(3000, t + 0.1);
+    shimOsc.frequency.exponentialRampToValueAtTime(1500, t + 0.6);
+    shimOsc.connect(shimG);
+    shimOsc.start(t + 0.1);
+    shimOsc.stop(t + 0.6);
+  }
+
+  /** Rating increase — ascending warm tone */
+  playRatingUp() {
+    if (!this.enabled || !this._ensureContext()) return;
+    const t = this.ctx.currentTime;
+
+    const notes = [440, 554, 659]; // A4 C#5 E5 (A major)
+    notes.forEach((freq, i) => {
+      const start = t + i * 0.1;
+      const g = this._gain(this.volume * 0.25);
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(this.volume * 0.25, start + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.25);
+
+      const osc = this.ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      osc.connect(g);
+      osc.start(start);
+      osc.stop(start + 0.25);
+    });
+  }
+
+  /** Rating decrease — descending minor tone */
+  playRatingDown() {
+    if (!this.enabled || !this._ensureContext()) return;
+    const t = this.ctx.currentTime;
+
+    const g = this._gain(this.volume * 0.2);
+    g.gain.setValueAtTime(this.volume * 0.2, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(330, t);
+    osc.frequency.exponentialRampToValueAtTime(196, t + 0.35);
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(t + 0.4);
+  }
+
+  /** Puzzle correct move — bright ping */
+  playPuzzleCorrect() {
+    if (!this.enabled || !this._ensureContext()) return;
+    const t = this.ctx.currentTime;
+
+    const g = this._gain(this.volume * 0.35);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(this.volume * 0.35, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 1320;
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(t + 0.2);
+  }
+
+  /** Puzzle wrong move — low buzz */
+  playPuzzleWrong() {
+    if (!this.enabled || !this._ensureContext()) return;
+    const t = this.ctx.currentTime;
+
+    const g = this._gain(this.volume * 0.3);
+    g.gain.setValueAtTime(this.volume * 0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = 120;
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(t + 0.2);
+  }
+
   setVolume(v) {
     this.volume = Math.max(0, Math.min(1, v));
   }
