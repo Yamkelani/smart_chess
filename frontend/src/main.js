@@ -1588,16 +1588,30 @@ class ChessGame {
     if (reviewBtn) { reviewBtn.disabled = true; reviewBtn.textContent = 'Analyzing...'; }
     if (overlayReviewBtn) { overlayReviewBtn.disabled = true; overlayReviewBtn.textContent = 'Analyzing...'; }
 
+    // Show progress modal while analyzing
+    this._showModal('Game Review', `<div id="review-progress" style="text-align:center;padding:30px;">
+      <div style="font-size:1.5rem;margin-bottom:12px;">Analyzing game...</div>
+      <div style="color:var(--text-muted);">Evaluating <span id="review-pos-count">0</span> / ${fenLog.length} positions</div>
+      <div style="margin-top:16px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;">
+        <div id="review-progress-bar" style="height:100%;width:0%;background:var(--accent-cyan);transition:width 0.3s;"></div>
+      </div>
+    </div>`);
+
     try {
-      const result = await this.api.reviewGame(fenLog, moves);
+      const result = await this.api.reviewGame(fenLog, moves, (current, total) => {
+        const countEl = document.getElementById('review-pos-count');
+        const barEl = document.getElementById('review-progress-bar');
+        if (countEl) countEl.textContent = current;
+        if (barEl) barEl.style.width = `${Math.round((current / total) * 100)}%`;
+      });
       if (result) {
         this._showReviewResults(result);
       } else {
-        this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review unavailable. Make sure the AI service is running.</p>');
+        this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review failed. No moves to analyze.</p>');
       }
     } catch (e) {
       console.error('Review failed:', e);
-      this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review failed. Check console for details.</p>');
+      this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review failed: ' + (e.message || 'Unknown error') + '</p>');
     } finally {
       if (reviewBtn) { reviewBtn.disabled = false; reviewBtn.textContent = '📊 Review'; }
       if (overlayReviewBtn) { overlayReviewBtn.disabled = false; overlayReviewBtn.textContent = '📊 Review Game'; }
@@ -1615,9 +1629,10 @@ class ChessGame {
       game_over: { color: '#888', label: '' },
     };
 
+    const sourceLabel = result.source === 'engine' ? ' (Engine)' : '';
     let html = `<div class="review-summary">
       <div class="review-accuracy">${result.accuracy}%</div>
-      <div class="review-label">Accuracy</div>
+      <div class="review-label">Accuracy${sourceLabel}</div>
     </div>
     <div class="review-moves">`;
 
