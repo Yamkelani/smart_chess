@@ -218,20 +218,85 @@ export class ChessAPI {
 
   // ── Game Review API ──
 
-  async reviewGame(fens, moves) {
+  async reviewGame(fens, moves, onProgress) {
     const aiBase = getAiBase();
-    if (!aiBase) return null;
-    try {
-      const resp = await fetch(`${aiBase}/ai/review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fens, moves }),
-      });
-      if (resp.ok) return resp.json();
-    } catch (e) {
-      console.warn('Review service unavailable');
+    if (aiBase) {
+      try {
+        const resp = await fetch(`${aiBase}/ai/review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fens, moves }),
+        });
+        if (resp.ok) return resp.json();
+      } catch (e) {
+        console.warn('AI review service unavailable, using engine review');
+      }
     }
-    return null;
+    // Fall back to local engine-based review
+    return this._localReview(fens, moves, onProgress);
+  }
+
+  /**
+   * Local game review using the engine's evaluate endpoint.
+   * Evaluates each position before and after each move to classify quality.
+   * @param {string[]} fens - FEN strings for each position
+   * @param {string[]} moves - Move strings (SAN or UCI)
+   * @param {Function} [onProgress] - optional callback(current, total)
+   */
+  async _localReview(fens, moves, onProgress) {
+    if (!fens || fens.length < 2) return null;
+    const depth = 6;
+    const evaluations = [];
+    let totalCpl = 0;
+    let playerMoves = 0;
+
+    // Evaluate all positions (before each move and after the last move)
+    const scores = [];
+    for (let i = 0; i < fens.length; i++) {
+      try {
+        const result = await this.evaluate(fens[i], depth);
+        // Normalise: score from white's perspective in centipawns
+        scores.push(typeof result.score === 'number' ? result.score : 0);
+      } catch {
+        scores.push(0);
+      }
+      if (onProgress) onProgress(i + 1, fens.length);
+    }
+
+    // Compare consecutive evaluations to classify each move
+    for (let i = 0; i < moves.length && i < fens.length - 1; i++) {
+      const before = scores[i];
+      const after = scores[i + 1];
+      const isWhite = i % 2 === 0;
+
+      // centipawn loss: how much worse the position got for the side that moved
+      const cpl = isWhite ? (before - after) : (after - before);
+      const absCpl = Math.max(0, cpl);
+
+      let classification;
+      if (cpl < -50) classification = 'brilliant';
+      else if (absCpl <= 10) classification = 'good';
+      else if (absCpl <= 30) classification = 'book';
+      else if (absCpl <= 80) classification = 'inaccuracy';
+      else if (absCpl <= 200) classification = 'mistake';
+      else classification = 'blunder';
+
+      evaluations.push({
+        move: moves[i] || '',
+        evaluation: after / 100,
+        classification,
+        cpl: absCpl,
+      });
+
+      totalCpl += absCpl;
+      playerMoves++;
+    }
+
+    // Accuracy: rough formula inspired by Lichess (capped 0-100)
+    const avgCpl = playerMoves > 0 ? totalCpl / playerMoves : 0;
+    const accuracy = Math.round(Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * avgCpl))));
+
+    return { accuracy, evaluations, source: 'engine' };
   }
 
   // ── AI Personality API ──
