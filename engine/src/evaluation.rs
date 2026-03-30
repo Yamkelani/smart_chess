@@ -232,6 +232,73 @@ pub fn search_best_move(board: &Board, depth: u8) -> Option<(crate::moves::Move,
     Some((best_move, best_score))
 }
 
+/// Multi-PV search: return the top N moves with their evaluations and principal variations.
+/// Each result is (move, score, pv) where pv is a Vec<Move> showing the expected continuation.
+pub fn search_top_moves(board: &Board, depth: u8, num_moves: usize) -> Vec<(crate::moves::Move, i32, Vec<crate::moves::Move>)> {
+    use crate::moves::{generate_legal_moves, make_move, Move};
+
+    let moves = generate_legal_moves(board);
+    if moves.is_empty() {
+        return vec![];
+    }
+
+    // Score every legal move
+    let mut scored: Vec<(Move, i32)> = Vec::new();
+    for mv in &moves {
+        let mut new_board = board.clone();
+        if make_move(&mut new_board, mv) {
+            let score = -alpha_beta(&new_board, depth.saturating_sub(1), i32::MIN + 1, i32::MAX - 1);
+            scored.push((*mv, score));
+        }
+    }
+
+    // Sort descending by score
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.truncate(num_moves);
+
+    // For each top move, extract a principal variation
+    scored.into_iter().map(|(mv, score)| {
+        let mut pv = vec![mv];
+        let mut pv_board = board.clone();
+        if make_move(&mut pv_board, &mv) {
+            extract_pv(&pv_board, depth.saturating_sub(1), &mut pv);
+        }
+        (mv, score, pv)
+    }).collect()
+}
+
+/// Extract the principal variation by following the best move at each depth.
+fn extract_pv(board: &Board, depth: u8, pv: &mut Vec<crate::moves::Move>) {
+    use crate::moves::{generate_legal_moves, make_move};
+
+    if depth == 0 || pv.len() >= 8 {
+        return;
+    }
+    let moves = generate_legal_moves(board);
+    if moves.is_empty() {
+        return;
+    }
+
+    let mut best_move = moves[0];
+    let mut best_score = i32::MIN + 1;
+    for mv in &moves {
+        let mut new_board = board.clone();
+        if make_move(&mut new_board, mv) {
+            let score = -alpha_beta(&new_board, depth.saturating_sub(1), i32::MIN + 1, i32::MAX - 1);
+            if score > best_score {
+                best_score = score;
+                best_move = *mv;
+            }
+        }
+    }
+
+    pv.push(best_move);
+    let mut next_board = board.clone();
+    if make_move(&mut next_board, &best_move) {
+        extract_pv(&next_board, depth.saturating_sub(1), pv);
+    }
+}
+
 fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32) -> i32 {
     use crate::moves::{generate_legal_moves, make_move};
 

@@ -813,6 +813,103 @@
       font-style: italic;
     }
 
+    /* ── Analysis / Best Moves Panel ── */
+    .analysis-move-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .analysis-move-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: var(--radius-sm);
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.78rem;
+      position: relative;
+    }
+    .analysis-move-item:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.12);
+    }
+    .analysis-move-item.active {
+      background: rgba(0,255,136,0.08);
+      border-color: rgba(0,255,136,0.25);
+    }
+    .analysis-move-item.simulating {
+      background: rgba(0,229,255,0.1);
+      border-color: rgba(0,229,255,0.3);
+      box-shadow: 0 0 12px rgba(0,229,255,0.1);
+    }
+    .analysis-rank {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .analysis-rank-1 { background: rgba(0,255,136,0.4); }
+    .analysis-rank-2 { background: rgba(102,204,255,0.35); }
+    .analysis-rank-3 { background: rgba(255,221,68,0.35); }
+    .analysis-rank-4 { background: rgba(255,153,68,0.3); }
+    .analysis-rank-5 { background: rgba(255,85,102,0.3); }
+    .analysis-move-san {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      min-width: 48px;
+    }
+    .analysis-move-eval {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-left: auto;
+    }
+    .analysis-move-eval.positive { color: #00ff88; }
+    .analysis-move-eval.negative { color: #ff5566; }
+    .analysis-move-eval.mate { color: #ffdd44; font-weight: 700; }
+    .analysis-move-badges {
+      display: flex;
+      gap: 3px;
+    }
+    .analysis-badge {
+      font-size: 0.6rem;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-weight: 600;
+    }
+    .analysis-badge.capture { background: rgba(255,68,102,0.15); color: #ff4466; }
+    .analysis-badge.check { background: rgba(255,34,68,0.15); color: #ff2244; }
+    .analysis-simulate-btn {
+      font-size: 0.6rem;
+      padding: 2px 6px;
+      border: 1px solid rgba(0,229,255,0.25);
+      border-radius: 4px;
+      background: rgba(0,229,255,0.08);
+      color: var(--accent-cyan);
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .analysis-simulate-btn:hover {
+      background: rgba(0,229,255,0.2);
+      border-color: rgba(0,229,255,0.5);
+    }
+    .analysis-simulate-btn.active {
+      background: rgba(0,229,255,0.25);
+      border-color: var(--accent-cyan);
+      color: #fff;
+    }
+
     .tutor-tag {
       display: inline-block;
       border-radius: 4px;
@@ -1446,6 +1543,7 @@
     .timer-box.time-warning { border-color: var(--accent-secondary) !important; }
     .timer-box.time-warning .timer-value { color: var(--accent-secondary) !important; animation: time-blink 0.5s ease infinite; }
     @keyframes time-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
     /* ─── Responsive Mobile Layout ─── */
     @media (max-width: 768px) {
@@ -1644,8 +1742,31 @@
           <button class="btn secondary" id="btn-flip">Flip</button>
         </div>
         <div class="btn-row">
-          <button class="btn secondary" id="btn-export-pgn" title="Export game as PGN">📋 PGN</button>
+          <button class="btn secondary" id="btn-export-pgn" title="Download game as PGN file">📋 PGN</button>
+          <button class="btn secondary" id="btn-copy-fen" title="Copy current FEN to clipboard">📎 FEN</button>
           <button class="btn secondary" id="btn-review" disabled title="AI game analysis">📊 Review</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn secondary" id="btn-resign" disabled title="Resign the current game">🏳 Resign</button>
+          <button class="btn secondary" id="btn-offer-draw" disabled title="Offer a draw">🤝 Draw</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn secondary" id="btn-analyze" title="Analyze position — show best moves with arrows">🔬 Analyze</button>
+          <button class="btn secondary" id="btn-attack-map" title="Toggle attack &amp; defense heatmap — blue=white control, red=black control, purple=contested, orange ring=hanging piece [V]">⚔ Attack Map</button>
+        </div>
+      </div>
+
+      <!-- Best Moves Analysis Panel -->
+      <div id="analysis-panel" style="display:none;">
+        <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>🔬 Best Moves</span>
+          <button id="analysis-close" class="btn secondary" style="padding:2px 8px;font-size:0.7rem;min-width:auto;">✕</button>
+        </div>
+        <div id="analysis-status" style="font-size:0.72rem;color:var(--text-muted);padding:2px 0;"></div>
+        <div id="analysis-moves" class="analysis-move-list"></div>
+        <div id="analysis-pv" style="display:none;font-size:0.72rem;color:var(--text-muted);padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:var(--radius-sm);margin-top:4px;">
+          <div style="color:var(--accent-cyan);margin-bottom:2px;font-weight:600;">Expected continuation</div>
+          <span id="analysis-pv-text"></span>
         </div>
       </div>
 
@@ -1747,6 +1868,7 @@
         <span class="shortcut-key">F <span class="desc">Flip</span></span>
         <span class="shortcut-key">M <span class="desc">Mute</span></span>
         <span class="shortcut-key">H <span class="desc">Hint</span></span>
+        <span class="shortcut-key">A <span class="desc">Analyze</span></span>
         <span class="shortcut-key">T <span class="desc">Mode</span></span>
         <span class="shortcut-key">Ctrl+Z <span class="desc">Undo</span></span>
         <span class="shortcut-key">Ctrl+Y <span class="desc">Redo</span></span>
@@ -1756,11 +1878,26 @@
       <div class="gap-6">
         <div class="btn-row">
           <button class="btn secondary" id="btn-puzzles">🧩 Puzzles</button>
-          <button class="btn secondary" id="btn-stats">📈 Stats</button>
+          <button class="btn secondary" id="btn-practice" title="Practice tactics and strategies">🎯 Practice</button>
         </div>
         <div class="btn-row">
+          <button class="btn secondary" id="btn-openings" title="Browse opening theory">📚 Openings</button>
+          <button class="btn secondary" id="btn-import-pgn" title="Import a game from PGN">📥 Import PGN</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn secondary" id="btn-stats">📈 Stats</button>
           <button class="btn secondary" id="btn-achievements">🏆 Achievements <span id="achievement-count" class="badge">0/0</span></button>
+        </div>
+        <div class="btn-row">
           <button class="btn secondary" id="btn-history">📜 History</button>
+        </div>
+        <!-- Custom FEN loader -->
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="fen-input" type="text" placeholder="Paste FEN to load position…"
+            style="flex:1;font-size:0.72rem;padding:5px 8px;background:var(--surface-2);
+                   border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);min-width:0;"
+            title="Paste a FEN string and press Load">
+          <button class="btn secondary" id="btn-load-fen" style="white-space:nowrap;font-size:0.72rem;">Load</button>
         </div>
       </div>
     </div>

@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use crate::attacks;
 use crate::board::Board;
-use crate::evaluation::{evaluate, search_best_move};
+use crate::evaluation::{evaluate, search_best_move, search_top_moves};
 use crate::game::GameState;
 use crate::moves::generate_legal_moves;
+use crate::persistence;
 
 pub struct AppState {
     pub games: Mutex<HashMap<String, GameState>>,
@@ -70,6 +72,36 @@ pub struct EvalResponse {
     pub legal_moves: Vec<String>,
 }
 
+#[derive(Deserialize)]
+pub struct AnalyzeRequest {
+    pub fen: String,
+    pub depth: Option<u8>,
+    pub num_moves: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct AnalyzedMove {
+    pub uci: String,
+    pub from: String,
+    pub to: String,
+    pub score: i32,
+    pub score_cp: i32,
+    pub mate_in: Option<i32>,
+    pub is_capture: bool,
+    pub is_check: bool,
+    pub principal_variation: Vec<String>,
+    pub resulting_fen: String,
+    pub resulting_pieces: Vec<crate::board::PieceInfo>,
+}
+
+#[derive(Serialize)]
+pub struct AnalyzeResponse {
+    pub fen: String,
+    pub evaluation: i32,
+    pub top_moves: Vec<AnalyzedMove>,
+    pub total_legal_moves: usize,
+}
+
 #[derive(Serialize)]
 pub struct EngineInfoResponse {
     pub name: String,
@@ -81,6 +113,45 @@ pub struct EngineInfoResponse {
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+// ---- FEN Validation ----
+
+/// Lightweight structural validation of a FEN string before it reaches the board parser.
+/// Catches obvious injection or malformed inputs without needing to parse the full board.
+fn validate_fen(fen: &str) -> Result<(), String> {
+    // Reject absurdly long strings
+    if fen.len() > 128 {
+        return Err("FEN string too long".to_string());
+    }
+    let parts: Vec<&str> = fen.split_whitespace().collect();
+    if parts.len() < 4 || parts.len() > 6 {
+        return Err(format!("FEN must have 4-6 fields, got {}", parts.len()));
+    }
+    // Validate piece placement: must have exactly 8 ranks
+    let ranks: Vec<&str> = parts[0].split('/').collect();
+    if ranks.len() != 8 {
+        return Err(format!("FEN piece placement must have 8 ranks, got {}", ranks.len()));
+    }
+    for rank in &ranks {
+        let mut count = 0u8;
+        for ch in rank.chars() {
+            match ch {
+                '1'..='8' => count += ch as u8 - b'0',
+                'p' | 'n' | 'b' | 'r' | 'q' | 'k' |
+                'P' | 'N' | 'B' | 'R' | 'Q' | 'K' => count += 1,
+                _ => return Err(format!("Invalid character '{}' in FEN rank", ch)),
+            }
+        }
+        if count != 8 {
+            return Err(format!("FEN rank '{}' does not sum to 8 squares", rank));
+        }
+    }
+    // Side to move
+    if parts[1] != "w" && parts[1] != "b" {
+        return Err(format!("Invalid side to move '{}' — must be 'w' or 'b'", parts[1]));
+    }
+    Ok(())
 }
 
 // ---- API Handlers ----
@@ -110,6 +181,9 @@ pub async fn new_game(
     body: web::Json<NewGameRequest>,
 ) -> impl Responder {
     let game = if let Some(fen) = &body.fen {
+        if let Err(e) = validate_fen(fen) {
+            return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+        }
         match GameState::from_fen(fen) {
             Ok(g) => g,
             Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
@@ -126,6 +200,9 @@ pub async fn new_game(
     };
 
     let game_id = game.id.clone();
+    if let Err(e) = persistence::save_game(&game) {
+        log::warn!("Could not persist new game {}: {}", game.id, e);
+    }
     data.games.lock().unwrap().insert(game_id, game);
 
     HttpResponse::Ok().json(response)
@@ -170,6 +247,9 @@ pub async fn make_move(
         Some(game) => {
             match game.make_move(&body.uci) {
                 Ok(result) => {
+                    if let Err(e) = persistence::save_game(game) {
+                        log::warn!("Could not persist game after move: {}", e);
+                    }
                     let response = MoveResponse {
                         success: true,
                         move_uci: result.move_uci,
@@ -207,6 +287,9 @@ pub async fn get_legal_moves(
 }
 
 pub async fn evaluate_position(body: web::Json<EvalRequest>) -> impl Responder {
+    if let Err(e) = validate_fen(&body.fen) {
+        return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+    }
     let board = match Board::from_fen(&body.fen) {
         Ok(b) => b,
         Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
@@ -243,6 +326,9 @@ pub async fn engine_move(
                     let uci = best_move.to_uci();
                     match game.make_move(&uci) {
                         Ok(result) => {
+                            if let Err(e) = persistence::save_game(game) {
+                                log::warn!("Could not persist game after engine move: {}", e);
+                            }
                             let response = MoveResponse {
                                 success: true,
                                 move_uci: result.move_uci,
@@ -270,6 +356,71 @@ pub async fn engine_move(
     }
 }
 
+pub async fn analyze_position(body: web::Json<AnalyzeRequest>) -> impl Responder {
+    if let Err(e) = validate_fen(&body.fen) {
+        return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+    }
+    let board = match Board::from_fen(&body.fen) {
+        Ok(b) => b,
+        Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
+    };
+
+    let depth = body.depth.unwrap_or(5);
+    let num_moves = body.num_moves.unwrap_or(5).min(10);
+    let eval = evaluate(&board);
+    let top = search_top_moves(&board, depth, num_moves);
+    let total_legal = generate_legal_moves(&board).len();
+
+    let top_moves: Vec<AnalyzedMove> = top.into_iter().map(|(mv, score, pv)| {
+        // Make the move to get the resulting position
+        let mut result_board = board.clone();
+        let is_capture = board.piece_at(mv.to).is_some() || mv.is_en_passant;
+        crate::moves::make_move(&mut result_board, &mv);
+        let is_check = result_board.is_in_check();
+
+        // Detect mate scores
+        let mate_in = if score.abs() > 18000 {
+            let plies = 19000 - score.abs();
+            let mate_moves = (plies + 1) / 2;
+            Some(if score > 0 { mate_moves } else { -mate_moves })
+        } else {
+            None
+        };
+
+        AnalyzedMove {
+            uci: mv.to_uci(),
+            from: crate::board::square_name(mv.from),
+            to: crate::board::square_name(mv.to),
+            score,
+            score_cp: score,
+            mate_in,
+            is_capture,
+            is_check,
+            principal_variation: pv.iter().map(|m| m.to_uci()).collect(),
+            resulting_fen: result_board.to_fen(),
+            resulting_pieces: result_board.to_piece_list(),
+        }
+    }).collect();
+
+    HttpResponse::Ok().json(AnalyzeResponse {
+        fen: body.fen.clone(),
+        evaluation: eval,
+        top_moves,
+        total_legal_moves: total_legal,
+    })
+}
+
+pub async fn attack_map(body: web::Json<EvalRequest>) -> impl Responder {
+    if let Err(e) = validate_fen(&body.fen) {
+        return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+    }
+    let board = match Board::from_fen(&body.fen) {
+        Ok(b) => b,
+        Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
+    };
+    HttpResponse::Ok().json(attacks::compute_attack_map(&board, body.fen.clone()))
+}
+
 /// Configure API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg
@@ -280,5 +431,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/game/{id}/move", web::post().to(make_move))
         .route("/game/{id}/moves", web::get().to(get_legal_moves))
         .route("/game/{id}/engine-move", web::post().to(engine_move))
-        .route("/evaluate", web::post().to(evaluate_position));
+        .route("/evaluate", web::post().to(evaluate_position))
+        .route("/analyze", web::post().to(analyze_position))
+        .route("/attack-map", web::post().to(attack_map));
 }

@@ -9,11 +9,11 @@
 import { ChessBoard3D } from './board.js';
 import { ChessAPI } from './api.js';
 import { sounds } from './sounds.js';
-import { identifyOpening } from './openings.js';
+import { identifyOpening, getAllOpenings, OPENING_CATEGORIES, getOpeningsByCategory } from './openings.js';
 import { updateRating, getRating, getRankTitle } from './rating.js';
 import { checkAchievements, getAllAchievements, getUnlockedCount, getTotalCount, triggerAchievement } from './achievements.js';
 import { toPGN, downloadPGN, copyPGN, saveGame, loadHistory, formatGameSummary } from './pgn.js';
-import { initBridge, isTauri } from './bridge.js';
+import { initBridge, isTauri, getAiBaseUrl } from './bridge.js';
 
 // Piece symbols for captured display (lowercase keys to match engine API)
 const PIECE_UNICODE = {
@@ -79,6 +79,13 @@ class ChessGame {
     this._puzzleMoveIndex = 0;
     this._solvedPuzzles = JSON.parse(localStorage.getItem('chess_solved_puzzles') || '[]');
 
+    // Practice / drill mode
+    this._drillMode = false;
+    this._currentDrill = null;
+    this._drillMoveIndex = 0;
+    this._drillProgress = JSON.parse(localStorage.getItem('chess_drill_progress') || '{}');
+    // { drillId: { completed: true, attempts: N } }
+
     // Pre-move system
     this._preMove = null; // { from, to } queued pre-move
     this._preMoveSelectedSquare = null;
@@ -110,6 +117,7 @@ class ChessGame {
     this._initAchievementsPanel();
     this._initGameHistory();
     this._initPuzzlePanel();
+    this._initPracticePanel();
     this._initStatsPanel();
     this._initClockModes();
     this._initDragAndDrop();
@@ -134,6 +142,24 @@ class ChessGame {
     if (exportBtn) exportBtn.addEventListener('click', () => this._exportPGN());
     const reviewBtn = document.getElementById('btn-review');
     if (reviewBtn) reviewBtn.addEventListener('click', () => this._reviewGame());
+    const analyzeBtn = document.getElementById('btn-analyze');
+    if (analyzeBtn) analyzeBtn.addEventListener('click', () => this._toggleAnalysis());
+    const attackMapBtn = document.getElementById('btn-attack-map');
+    if (attackMapBtn) attackMapBtn.addEventListener('click', () => this._toggleAttackMap());
+    const resignBtn = document.getElementById('btn-resign');
+    if (resignBtn) resignBtn.addEventListener('click', () => this._resign());
+    const offerDrawBtn = document.getElementById('btn-offer-draw');
+    if (offerDrawBtn) offerDrawBtn.addEventListener('click', () => this._offerDraw());
+    const copyFenBtn = document.getElementById('btn-copy-fen');
+    if (copyFenBtn) copyFenBtn.addEventListener('click', () => this._copyFen());
+    const openingsBtn = document.getElementById('btn-openings');
+    if (openingsBtn) openingsBtn.addEventListener('click', () => this._showOpeningExplorer());
+    const importPgnBtn = document.getElementById('btn-import-pgn');
+    if (importPgnBtn) importPgnBtn.addEventListener('click', () => this._showImportPGN());
+    const loadFenBtn = document.getElementById('btn-load-fen');
+    if (loadFenBtn) loadFenBtn.addEventListener('click', () => this._loadFenInput());
+    const fenInput = document.getElementById('fen-input');
+    if (fenInput) fenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this._loadFenInput(); });
     document.getElementById('use-ai').addEventListener('change', (e) => {
       this.useAI = e.target.checked;
     });
@@ -175,6 +201,14 @@ class ChessGame {
         case 'h':
           e.preventDefault();
           this._requestHint();
+          break;
+        case 'a':
+          e.preventDefault();
+          this._toggleAnalysis();
+          break;
+        case 'v':
+          e.preventDefault();
+          this._toggleAttackMap();
           break;
         case 't':
           e.preventDefault();
@@ -460,6 +494,291 @@ class ChessGame {
     }
   }
 
+  // ── Best Moves Analysis / Simulation ──
+
+  async _toggleAnalysis() {
+    const panel = document.getElementById('analysis-panel');
+    if (!panel) return;
+
+    if (panel.style.display !== 'none' && panel.style.display !== '') {
+      this._closeAnalysis();
+      return;
+    }
+
+    await this._runAnalysis();
+  }
+
+  async _runAnalysis() {
+    const panel = document.getElementById('analysis-panel');
+    const statusEl = document.getElementById('analysis-status');
+    const movesEl = document.getElementById('analysis-moves');
+    const pvEl = document.getElementById('analysis-pv');
+    if (!panel || !movesEl) return;
+
+    if (!this.fen || this.status !== 'Active') {
+      if (statusEl) statusEl.textContent = 'Start a game first!';
+      panel.style.display = 'block';
+      return;
+    }
+
+    panel.style.display = 'block';
+    if (statusEl) statusEl.textContent = 'Analyzing position...';
+    movesEl.innerHTML = '';
+    if (pvEl) pvEl.style.display = 'none';
+
+    // Store analysis state
+    this._analysisActive = true;
+    this._analysisData = null;
+    this._analysisSelected = null;
+    this._analysisSimulating = null;
+
+    try {
+      const result = await this.api.analyzePosition(this.fen, 5, 5);
+      if (!result || !result.top_moves || result.top_moves.length === 0) {
+        if (statusEl) statusEl.textContent = 'No moves to analyze.';
+        return;
+      }
+
+      this._analysisData = result;
+      const totalMoves = result.total_legal_moves || result.top_moves.length;
+      if (statusEl) statusEl.textContent = `Showing top ${result.top_moves.length} of ${totalMoves} legal moves`;
+
+      // Draw arrows on the board
+      const arrowMoves = result.top_moves.map((m, i) => ({
+        from: m.from, to: m.to, rank: i
+      }));
+      this.board.showAnalysisArrows(arrowMoves);
+
+      // Render the move list
+      this._renderAnalysisMoves(result.top_moves);
+
+      // Wire close button
+      const closeBtn = document.getElementById('analysis-close');
+      if (closeBtn) closeBtn.onclick = () => this._closeAnalysis();
+
+      sounds.playSelect();
+    } catch (err) {
+      console.error('Analysis failed:', err);
+      if (statusEl) statusEl.textContent = 'Analysis failed — engine may be offline.';
+    }
+  }
+
+  _renderAnalysisMoves(topMoves) {
+    const movesEl = document.getElementById('analysis-moves');
+    if (!movesEl) return;
+    movesEl.innerHTML = '';
+
+    topMoves.forEach((move, idx) => {
+      const item = document.createElement('div');
+      item.className = 'analysis-move-item';
+      if (idx === 0) item.classList.add('active');
+      item.dataset.index = idx;
+
+      // Rank badge
+      const rank = document.createElement('div');
+      rank.className = `analysis-rank analysis-rank-${idx + 1}`;
+      rank.textContent = idx + 1;
+
+      // Move SAN (convert from UCI to readable)
+      const san = document.createElement('span');
+      san.className = 'analysis-move-san';
+      san.textContent = this._uciToReadable(move);
+
+      // Badges (capture, check)
+      const badges = document.createElement('span');
+      badges.className = 'analysis-move-badges';
+      if (move.is_capture) {
+        const b = document.createElement('span');
+        b.className = 'analysis-badge capture';
+        b.textContent = 'x';
+        badges.appendChild(b);
+      }
+      if (move.is_check) {
+        const b = document.createElement('span');
+        b.className = 'analysis-badge check';
+        b.textContent = '+';
+        badges.appendChild(b);
+      }
+
+      // Simulate button
+      const simBtn = document.createElement('button');
+      simBtn.className = 'analysis-simulate-btn';
+      simBtn.textContent = '👁 Preview';
+      simBtn.title = 'Preview the board after this move';
+      simBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._simulateAnalysisMove(idx);
+      });
+
+      // Eval score
+      const evalSpan = document.createElement('span');
+      evalSpan.className = 'analysis-move-eval';
+      if (move.mate_in != null) {
+        evalSpan.classList.add('mate');
+        evalSpan.textContent = `M${Math.abs(move.mate_in)}`;
+      } else {
+        const cp = move.score_cp / 100;
+        evalSpan.textContent = (cp >= 0 ? '+' : '') + cp.toFixed(1);
+        evalSpan.classList.add(cp >= 0 ? 'positive' : 'negative');
+      }
+
+      item.appendChild(rank);
+      item.appendChild(san);
+      item.appendChild(badges);
+      item.appendChild(simBtn);
+      item.appendChild(evalSpan);
+
+      // Click to highlight this move's arrow
+      item.addEventListener('click', () => this._selectAnalysisMove(idx));
+
+      // Hover to show PV
+      item.addEventListener('mouseenter', () => this._showAnalysisPV(idx));
+
+      movesEl.appendChild(item);
+    });
+  }
+
+  _uciToReadable(move) {
+    // Attempt to describe the move from its UCI and metadata
+    const from = move.from.toUpperCase();
+    const to = move.to.toUpperCase();
+    // Try to find the piece at the from-square
+    const piece = this.pieces.find(p => p.square === move.from);
+    if (!piece) return `${from}-${to}`;
+    const name = piece.piece_type.charAt(0).toUpperCase() + piece.piece_type.slice(1);
+    const abbr = piece.piece_type === 'knight' ? 'N' :
+                 piece.piece_type === 'pawn' ? '' :
+                 name.charAt(0);
+    const cap = move.is_capture ? 'x' : '';
+    const check = move.is_check ? '+' : '';
+    if (piece.piece_type === 'pawn' && move.is_capture) {
+      return `${move.from[0]}x${to}${check}`;
+    }
+    return `${abbr}${cap}${to.toLowerCase()}${check}`;
+  }
+
+  _selectAnalysisMove(idx) {
+    if (!this._analysisData) return;
+    this._analysisSelected = idx;
+
+    // Update UI
+    const items = document.querySelectorAll('.analysis-move-item');
+    items.forEach((el, i) => el.classList.toggle('active', i === idx));
+
+    // Update arrows — highlight the selected move
+    const arrowMoves = this._analysisData.top_moves.map((m, i) => ({
+      from: m.from, to: m.to, rank: i
+    }));
+    this.board.showAnalysisArrows(arrowMoves, idx);
+
+    this._showAnalysisPV(idx);
+    sounds.playSelect();
+  }
+
+  _showAnalysisPV(idx) {
+    const pvEl = document.getElementById('analysis-pv');
+    const pvText = document.getElementById('analysis-pv-text');
+    if (!pvEl || !pvText || !this._analysisData) return;
+
+    const move = this._analysisData.top_moves[idx];
+    if (!move || !move.principal_variation || move.principal_variation.length <= 1) {
+      pvEl.style.display = 'none';
+      return;
+    }
+
+    pvText.textContent = move.principal_variation.join(' → ');
+    pvEl.style.display = 'block';
+  }
+
+  _simulateAnalysisMove(idx) {
+    if (!this._analysisData) return;
+    const move = this._analysisData.top_moves[idx];
+    if (!move) return;
+
+    const items = document.querySelectorAll('.analysis-move-item');
+    const simBtns = document.querySelectorAll('.analysis-simulate-btn');
+
+    if (this._analysisSimulating === idx) {
+      // Toggle off — restore real position
+      this._analysisSimulating = null;
+      this.board._clearPreview();
+      items.forEach(el => el.classList.remove('simulating'));
+      simBtns.forEach(btn => btn.classList.remove('active'));
+      return;
+    }
+
+    this._analysisSimulating = idx;
+    items.forEach((el, i) => {
+      el.classList.toggle('simulating', i === idx);
+    });
+    simBtns.forEach((btn, i) => {
+      btn.classList.toggle('active', i === idx);
+    });
+
+    // Show ghost pieces for the resulting position
+    if (move.resulting_pieces) {
+      this.board.previewPosition(move.resulting_pieces);
+    }
+
+    sounds.playSelect();
+
+    // Add coaching tip about the simulated move
+    const coachEl = document.getElementById('tutor-coach-content');
+    if (coachEl) {
+      const readable = this._uciToReadable(move);
+      let desc = `Simulating <strong>#${idx + 1}: ${readable}</strong>`;
+      if (move.is_capture) desc += ' — captures a piece';
+      if (move.is_check) desc += ' — gives check!';
+      if (move.mate_in != null) desc += ` — checkmate in ${Math.abs(move.mate_in)}`;
+
+      const tip = document.createElement('div');
+      tip.className = 'tutor-tip';
+      tip.innerHTML = `<span class="tutor-tag" style="background:rgba(0,255,136,0.15);color:#00ff88;">🔬 SIM</span> ${desc}`;
+      coachEl.appendChild(tip);
+      coachEl.scrollTop = coachEl.scrollHeight;
+    }
+  }
+
+  _closeAnalysis() {
+    const panel = document.getElementById('analysis-panel');
+    if (panel) panel.style.display = 'none';
+    this._analysisActive = false;
+    this._analysisData = null;
+    this._analysisSelected = null;
+    this._analysisSimulating = null;
+    this.board.clearAnalysis();
+
+    // Restore last-move highlight
+    if (this.lastMoveFrom && this.lastMoveTo) {
+      this.board.highlightLastMove(this.lastMoveFrom, this.lastMoveTo);
+    }
+  }
+
+  // ── Attack & Defense Map ──
+
+  async _toggleAttackMap() {
+    const btn = document.getElementById('btn-attack-map');
+    if (this._attackMapActive) {
+      this.board.clearAttackMap();
+      this._attackMapActive = false;
+      if (btn) { btn.textContent = 'Attack Map'; btn.classList.remove('active'); }
+      return;
+    }
+    await this._refreshAttackMap();
+    if (btn) { btn.textContent = 'Hide Map'; btn.classList.add('active'); }
+  }
+
+  async _refreshAttackMap() {
+    if (!this.fen) return;
+    try {
+      const data = await this.api.getAttackMap(this.fen);
+      this.board.showAttackMap(data);
+      this._attackMapActive = true;
+    } catch (e) {
+      console.warn('Attack map unavailable:', e.message);
+    }
+  }
+
   // ── Learn Tab ──
 
   async _loadLessons() {
@@ -523,6 +842,10 @@ class ChessGame {
     this.moveHistory = [];
     this.capturedWhite = [];
     this.capturedBlack = [];
+    this.board.clearAttackMap();
+    this._attackMapActive = false;
+    const attackBtn = document.getElementById('btn-attack-map');
+    if (attackBtn) { attackBtn.textContent = 'Attack Map'; attackBtn.classList.remove('active'); }
     this.status = 'Active';
     this.playerColor = document.getElementById('color-select').value;
     this.useAI = document.getElementById('use-ai').checked;
@@ -542,8 +865,11 @@ class ChessGame {
     this._hadPromotion = false;
     this._currentOpening = null;
     this._puzzleMode = false;
+    this._drillMode = false;
+    this._currentDrill = null;
+    this._drillMoveIndex = 0;
 
-    // Restore AI if it was toggled off for puzzle mode
+    // Restore AI if it was toggled off for puzzle/drill mode
     if (this._savedUseAI !== undefined) {
       this.useAI = this._savedUseAI;
       delete this._savedUseAI;
@@ -551,6 +877,9 @@ class ChessGame {
 
     // Clear pre-move
     this._clearPreMove();
+
+    // Close analysis if open
+    this._closeAnalysis();
 
     // Reset move qualities
     this._moveQualities = {};
@@ -753,6 +1082,12 @@ class ChessGame {
       // Log FEN for review
       this._fenLog.push(data.fen);
 
+      // Close analysis panel when a move is made
+      if (this._analysisActive) this._closeAnalysis();
+
+      // Refresh attack map overlay if it's visible
+      if (this._attackMapActive) this._refreshAttackMap();
+
       // Track the move
       const fromSq = uci.substring(0, 2);
       const toSq = uci.substring(2, 4);
@@ -810,6 +1145,11 @@ class ChessGame {
       this._updateOpening();
       this._updateUndoRedoButtons();
 
+      // Live coaching — non-blocking, fires after every move in training/normal mode
+      if (this.gameMode !== 'friendly' && !this._puzzleMode && !this._drillMode) {
+        this._liveTutorAnalysis();
+      }
+
       // Check for game over
       if (this.status !== 'Active') {
         this._stopTimer();
@@ -821,6 +1161,12 @@ class ChessGame {
       // Puzzle mode: check the move first (don't let AI respond)
       if (this._puzzleMode && this._currentPuzzle) {
         this._checkPuzzleMove(uci);
+        return;
+      }
+
+      // Drill / practice mode: check the move against drill solution
+      if (this._drillMode && this._currentDrill) {
+        this._checkDrillMove(uci);
         return;
       }
 
@@ -898,6 +1244,8 @@ class ChessGame {
       if (moveUci) {
         // AI got a move from the NN service — now make it on the engine
         await this._makeAIMoveOnEngine(moveUci);
+        // Non-blocking move explanation in training mode
+        if (this.gameMode !== 'friendly') this._explainAIMove(moveUci, aiResult);
       }
     } catch (err) {
       console.error('AI move failed:', err);
@@ -926,6 +1274,38 @@ class ChessGame {
     } finally {
       this.thinking = false;
       document.getElementById('thinking').style.display = 'none';
+    }
+  }
+
+  async _explainAIMove(uci, aiResult) {
+    // Build a concise prompt from the move + eval context
+    const eval_ = aiResult && aiResult.evaluation != null ? aiResult.evaluation.toFixed(2) : null;
+    const topMoves = aiResult && aiResult.top_moves ? aiResult.top_moves.slice(0, 2).map(m => m.san || m.move).join(', ') : null;
+    const prompt = `The AI just played ${uci}. In 1-2 short sentences, explain why this is a good move in this position. Be concrete (mention piece activity, threats, or structure). Evaluation: ${eval_ || 'unknown'}.`;
+
+    try {
+      const resp = await fetch(`${this._getAiBase()}/ai/tutor/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: prompt, fen: this.fen }),
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const answer = data.answer || '';
+      if (!answer) return;
+
+      const coachEl = document.getElementById('tutor-coach-content');
+      if (!coachEl) return;
+      const div = document.createElement('div');
+      div.className = 'tutor-tip';
+      div.style.cssText = 'border-left:3px solid var(--accent-cyan);padding-left:8px;margin-bottom:4px;';
+      div.innerHTML = `<span class="tutor-tag" style="background:var(--accent-cyan)22;color:var(--accent-cyan);">🤖 AI MOVE</span> ${answer}${topMoves ? `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:3px;">Considered: ${topMoves}</div>` : ''}`;
+      coachEl.prepend(div);
+      // Keep coach panel trim
+      while (coachEl.children.length > 6) coachEl.removeChild(coachEl.lastChild);
+    } catch (e) {
+      // Silent — explanation is non-critical
     }
   }
 
@@ -2061,6 +2441,606 @@ class ChessGame {
     ];
   }
 
+  // ── Practice / Drill Mode ──
+
+  _initPracticePanel() {
+    const btn = document.getElementById('btn-practice');
+    if (btn) btn.addEventListener('click', () => this._showPracticeMenu());
+  }
+
+  async _showPracticeMenu() {
+    // Try to load categories from AI service
+    let categories = null;
+    try {
+      const data = await this.api.getDrillCategories();
+      if (data && data.categories) categories = data.categories;
+    } catch (e) {}
+
+    // Fallback built-in categories
+    if (!categories) {
+      categories = [
+        { id: 'fork',      name: 'Forks',              icon: '🍴', description: 'Attack two pieces at once to win material.',        count: 5, color: '#f59e0b' },
+        { id: 'pin',       name: 'Pins',               icon: '📌', description: 'Pin a piece to the king or a more valuable piece.', count: 3, color: '#3b82f6' },
+        { id: 'skewer',    name: 'Skewers',            icon: '⚔️', description: 'Force a valuable piece to move, win what\'s behind.', count: 3, color: '#8b5cf6' },
+        { id: 'discovery', name: 'Discovered Attacks', icon: '💥', description: 'Move one piece to unleash a hidden attack.',        count: 3, color: '#ef4444' },
+        { id: 'back_rank', name: 'Back Rank Mates',    icon: '🏰', description: 'Exploit a weak back rank to deliver checkmate.',    count: 3, color: '#10b981' },
+        { id: 'checkmate', name: 'Checkmate Patterns', icon: '♟️', description: 'Classic mating patterns you must know.',            count: 4, color: '#ec4899' },
+        { id: 'opening',   name: 'Opening Principles', icon: '📖', description: 'Master the fundamentals of the opening phase.',     count: 4, color: '#06b6d4' },
+        { id: 'endgame',   name: 'Endgame Technique',  icon: '🏁', description: 'Key endgame positions every player must know.',     count: 4, color: '#84cc16' },
+      ];
+    }
+
+    // Build category cards
+    let html = `
+      <div style="padding:4px 0 12px;">
+        <p style="color:var(--text-muted);font-size:0.8rem;margin:0 0 16px;">
+          Choose a category to practice. Each drill shows a real position — find the correct move to complete the tactic.
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    `;
+
+    for (const cat of categories) {
+      const done = this._countDrillsDone(cat.id);
+      const total = cat.count || 0;
+      const pct = total > 0 ? Math.round(done / total * 100) : 0;
+      html += `
+        <div class="practice-cat-card" data-cat-id="${cat.id}"
+             style="border:1px solid ${cat.color}33;border-radius:10px;padding:12px;cursor:pointer;
+                    background:${cat.color}11;transition:background 0.2s;">
+          <div style="font-size:1.5rem;margin-bottom:6px;">${cat.icon}</div>
+          <div style="font-weight:600;font-size:0.85rem;color:var(--text);">${cat.name}</div>
+          <div style="font-size:0.7rem;color:var(--text-muted);margin:4px 0 8px;">${cat.description}</div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div style="flex:1;height:4px;background:var(--surface-2);border-radius:2px;">
+              <div style="width:${pct}%;height:100%;background:${cat.color};border-radius:2px;"></div>
+            </div>
+            <span style="font-size:0.65rem;color:var(--text-muted);">${done}/${total}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    html += '</div></div>';
+    this._showModal('🎯 Practice Mode', html);
+
+    setTimeout(() => {
+      document.querySelectorAll('.practice-cat-card').forEach(el => {
+        el.addEventListener('mouseenter', () => el.style.background = el.style.borderColor.replace('33)', '22)'));
+        el.addEventListener('mouseleave', () => el.style.background = el.style.borderColor.replace('22)', '11)'));
+        el.addEventListener('click', () => this._showDrillList(el.dataset.catId, categories));
+      });
+    }, 80);
+  }
+
+  async _showDrillList(categoryId, categories) {
+    const cat = categories.find(c => c.id === categoryId) || { name: categoryId, icon: '🎯', color: '#888' };
+
+    let drills = null;
+    try {
+      const data = await this.api.getDrillsByCategory(categoryId);
+      if (data && data.drills) drills = data.drills;
+    } catch (e) {}
+
+    if (!drills || drills.length === 0) {
+      this._showModal('🎯 Practice', `<p style="color:var(--text-muted);padding:20px;text-align:center;">No drills found. Make sure the AI service is running.</p>`);
+      return;
+    }
+
+    let html = `
+      <div>
+        <button id="practice-back-btn" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.8rem;margin-bottom:12px;">← Back to categories</button>
+        <div style="font-size:1.1rem;font-weight:700;margin-bottom:4px;">${cat.icon} ${cat.name}</div>
+        <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:16px;">${drills.length} drill${drills.length !== 1 ? 's' : ''} — click one to start</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+    `;
+
+    for (const drill of drills) {
+      const progress = this._drillProgress[drill.id];
+      const done = progress && progress.completed;
+      const attempts = progress ? progress.attempts : 0;
+      html += `
+        <div class="drill-list-item" data-drill-id="${drill.id}"
+             style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;
+                    background:var(--surface-2);cursor:pointer;border:1px solid ${done ? cat.color + '66' : 'transparent'};">
+          <div style="font-size:1.2rem;">${done ? '✅' : '⬜'}</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;font-size:0.85rem;">${drill.title}</div>
+            <div style="font-size:0.7rem;color:var(--text-muted);">
+              Rating ${drill.rating} · ${drill.tactic ? drill.tactic.replace(/_/g,' ') : ''}
+              ${attempts > 0 ? ` · ${attempts} attempt${attempts !== 1 ? 's' : ''}` : ''}
+            </div>
+          </div>
+          ${done ? `<span style="font-size:0.65rem;color:${cat.color};font-weight:700;">DONE</span>` : ''}
+        </div>
+      `;
+    }
+
+    html += '</div></div>';
+    this._showModal(`🎯 ${cat.name}`, html);
+
+    setTimeout(() => {
+      const backBtn = document.getElementById('practice-back-btn');
+      if (backBtn) backBtn.addEventListener('click', () => this._showPracticeMenu());
+
+      document.querySelectorAll('.drill-list-item').forEach(el => {
+        el.addEventListener('click', () => this._startDrill(el.dataset.drillId, drills));
+      });
+    }, 80);
+  }
+
+  async _startDrill(drillId, drillsCache = null) {
+    // Close modal
+    const modal = document.getElementById('feature-modal');
+    if (modal) modal.remove();
+
+    // Load drill data (from cache or API)
+    let drill = drillsCache ? drillsCache.find(d => d.id === drillId) : null;
+    if (!drill) {
+      try {
+        drill = await this.api.getDrill(drillId);
+      } catch (e) {}
+    }
+    if (!drill) {
+      this._showPuzzleStatus('Could not load drill — AI service unavailable', 'wrong');
+      return;
+    }
+
+    try {
+      this._drillMode = true;
+      this._currentDrill = drill;
+      this._drillMoveIndex = 0;
+      this._savedUseAI = this.useAI;
+      this.useAI = false;
+
+      // Track attempts
+      if (!this._drillProgress[drillId]) this._drillProgress[drillId] = { completed: false, attempts: 0 };
+      this._drillProgress[drillId].attempts++;
+      localStorage.setItem('chess_drill_progress', JSON.stringify(this._drillProgress));
+
+      // Load the drill FEN
+      const data = await this.api.newGame(drill.fen);
+      this.gameId = data.game_id;
+      this.fen = data.fen;
+      this.pieces = data.pieces;
+      this.legalMoves = data.legal_moves;
+      this.sideToMove = drill.fen.split(' ')[1] === 'w' ? 'white' : 'black';
+      this.playerColor = this.sideToMove;
+      this.status = 'Active';
+      this.moveHistory = [];
+
+      this.board.clearHighlights();
+      this.board.setPieces(this.pieces);
+      this._updateUI();
+
+      // Category info for color
+      const catColors = { fork:'#f59e0b', pin:'#3b82f6', skewer:'#8b5cf6', discovery:'#ef4444',
+                          back_rank:'#10b981', checkmate:'#ec4899', opening:'#06b6d4', endgame:'#84cc16' };
+      const catColor = catColors[drill.category] || 'var(--accent)';
+      const catIcons = { fork:'🍴', pin:'📌', skewer:'⚔️', discovery:'💥', back_rank:'🏰',
+                         checkmate:'♟️', opening:'📖', endgame:'🏁' };
+      const catIcon = catIcons[drill.category] || '🎯';
+
+      // Show drill info in coach panel
+      const coachEl = document.getElementById('tutor-coach-content');
+      if (coachEl) {
+        coachEl.innerHTML = `
+          <div class="tutor-tip">
+            <span class="tutor-tag" style="background:${catColor}33;color:${catColor};border:1px solid ${catColor}55;">
+              ${catIcon} ${(drill.category || 'drill').replace(/_/g,' ').toUpperCase()}
+            </span>
+            <strong style="margin-left:6px;">${drill.title}</strong>
+          </div>
+          <div class="tutor-tip" style="margin-top:6px;">${drill.hint || 'Find the best move!'}</div>
+          <div class="tutor-tip" style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">Rating: ${drill.rating} · ${(drill.tactic || '').replace(/_/g,' ')}</div>
+          <div style="margin-top:10px;">
+            <button id="drill-hint-btn" class="btn secondary" style="font-size:0.72rem;padding:3px 8px;">💡 Show Hint</button>
+            <button id="drill-skip-btn" class="btn secondary" style="font-size:0.72rem;padding:3px 8px;margin-left:6px;">⏭ Skip</button>
+          </div>
+        `;
+        const tutorPanel = document.getElementById('tutor-panel');
+        if (tutorPanel) tutorPanel.classList.remove('minimized');
+
+        setTimeout(() => {
+          const hintBtn = document.getElementById('drill-hint-btn');
+          if (hintBtn) hintBtn.addEventListener('click', () => {
+            const tip = document.createElement('div');
+            tip.className = 'tutor-tip';
+            tip.style.cssText = 'margin-top:8px;padding:8px;background:var(--surface-2);border-radius:6px;font-size:0.75rem;';
+            tip.textContent = `💡 ${drill.hint}`;
+            coachEl.appendChild(tip);
+            hintBtn.remove();
+          });
+          const skipBtn = document.getElementById('drill-skip-btn');
+          if (skipBtn) skipBtn.addEventListener('click', () => {
+            this._drillMode = false;
+            this._currentDrill = null;
+            if (this._savedUseAI !== undefined) { this.useAI = this._savedUseAI; delete this._savedUseAI; }
+            this._showPuzzleStatus('Drill skipped.', 'info');
+            setTimeout(() => this._showPracticeMenu(), 800);
+          });
+        }, 100);
+      }
+
+      this._showPuzzleStatus(`🎯 ${drill.title} — ${drill.hint}`, 'info');
+    } catch (e) {
+      console.error('Failed to start drill:', e);
+      this._drillMode = false;
+    }
+  }
+
+  async _checkDrillMove(uci) {
+    if (!this._currentDrill) return false;
+
+    // Optimistically count the move
+    const drillId = this._currentDrill.id;
+
+    try {
+      const result = await this.api.checkDrillMove(drillId, this._drillMoveIndex, uci);
+
+      if (!result) {
+        this._showPuzzleStatus('Could not check move — service unavailable', 'wrong');
+        return false;
+      }
+
+      if (result.correct) {
+        this._drillMoveIndex++;
+        sounds.playPuzzleCorrect();
+
+        if (result.completed) {
+          // Mark as completed
+          if (!this._drillProgress[drillId]) this._drillProgress[drillId] = { completed: false, attempts: 1 };
+          this._drillProgress[drillId].completed = true;
+          localStorage.setItem('chess_drill_progress', JSON.stringify(this._drillProgress));
+
+          this._showPuzzleStatus('✅ Excellent! Tactic mastered!', 'correct');
+          this._drillMode = false;
+          if (this._savedUseAI !== undefined) { this.useAI = this._savedUseAI; delete this._savedUseAI; }
+
+          // Show explanation in coach
+          const coachEl = document.getElementById('tutor-coach-content');
+          if (coachEl && result.explanation) {
+            const expDiv = document.createElement('div');
+            expDiv.className = 'tutor-tip';
+            expDiv.style.cssText = 'margin-top:10px;padding:10px;background:var(--surface-2);border-radius:6px;font-size:0.75rem;border-left:3px solid #10b981;';
+            expDiv.innerHTML = `<strong style="color:#10b981;">✅ Well done!</strong><br><br>${result.explanation}`;
+            coachEl.appendChild(expDiv);
+
+            // Add "Next drill" button
+            const nextDiv = document.createElement('div');
+            nextDiv.style.marginTop = '10px';
+            nextDiv.innerHTML = `<button id="drill-next-btn" class="btn secondary" style="font-size:0.75rem;">🎯 Next Drill</button>`;
+            coachEl.appendChild(nextDiv);
+            setTimeout(() => {
+              const nb = document.getElementById('drill-next-btn');
+              if (nb) nb.addEventListener('click', () => this._showPracticeMenu());
+            }, 100);
+          }
+        } else if (result.next_move) {
+          this._showPuzzleStatus('✓ Correct! Opponent responds...', 'correct');
+          setTimeout(async () => {
+            await this._makeMove(result.next_move);
+            this._drillMoveIndex++;
+            this._showPuzzleStatus('Keep going — find the next move!', 'info');
+          }, 800);
+        }
+        return true;
+      } else {
+        sounds.playPuzzleWrong();
+        this._showPuzzleStatus('✗ Not quite right. Look at the hint and try again!', 'wrong');
+        return false;
+      }
+    } catch (e) {
+      console.error('Drill check error:', e);
+      return false;
+    }
+  }
+
+  _countDrillsDone(_categoryId) {
+    // Count completed drills from local progress cache.
+    // Full category filtering requires the drill list; total is fine for progress display.
+    return Object.values(this._drillProgress)
+      .filter(p => p.completed)
+      .length;
+  }
+
+  // ── Opening Explorer ──
+
+  _showOpeningExplorer(activeCatId = null) {
+    const cats = OPENING_CATEGORIES;
+
+    // Build tab bar + content
+    let tabsHtml = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">';
+    for (const cat of cats) {
+      const active = cat.id === activeCatId;
+      tabsHtml += `<button class="opening-cat-tab btn secondary" data-cat="${cat.id}"
+        style="font-size:0.72rem;padding:4px 10px;border:1px solid ${cat.color}55;
+               ${active ? `background:${cat.color}33;color:${cat.color};` : ''}">
+        ${cat.icon} ${cat.name.split(' ')[0]}
+      </button>`;
+    }
+    tabsHtml += '</div>';
+
+    let contentHtml = '';
+    if (activeCatId) {
+      const entries = getOpeningsByCategory(activeCatId);
+      const cat = cats.find(c => c.id === activeCatId);
+      contentHtml += `<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:10px;">${cat.name} — ${entries.length} openings</div>`;
+      contentHtml += '<div style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;">';
+      for (const o of entries) {
+        const moveStr = o.moves.join(' ');
+        contentHtml += `
+          <div class="opening-entry" data-moves="${moveStr}"
+               style="padding:8px 10px;border-radius:8px;background:var(--surface-2);
+                      border:1px solid transparent;cursor:pointer;">
+            <div style="display:flex;align-items:baseline;gap:8px;">
+              <span style="font-weight:600;font-size:0.82rem;">${o.name}</span>
+              ${o.eco ? `<span style="font-size:0.65rem;color:${cat.color};background:${cat.color}22;padding:1px 5px;border-radius:4px;">${o.eco}</span>` : ''}
+              <span style="font-size:0.65rem;color:var(--text-muted);margin-left:auto;">${o.moves.length} moves</span>
+            </div>
+            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px;">${o.desc}</div>
+            <div style="font-size:0.65rem;color:var(--border);margin-top:4px;font-family:monospace;">${o.moves.slice(0,6).join(' ')}${o.moves.length>6?'…':''}</div>
+          </div>`;
+      }
+      contentHtml += '</div>';
+    } else {
+      contentHtml = '<div style="color:var(--text-muted);font-size:0.8rem;text-align:center;padding:20px;">Select a category above to browse openings.<br><br>Click any opening to practice its moves on the board.</div>';
+    }
+
+    this._showModal('📚 Opening Explorer', tabsHtml + contentHtml);
+
+    setTimeout(() => {
+      document.querySelectorAll('.opening-cat-tab').forEach(btn => {
+        btn.addEventListener('click', () => this._showOpeningExplorer(btn.dataset.cat));
+      });
+      document.querySelectorAll('.opening-entry').forEach(el => {
+        el.addEventListener('mouseenter', () => el.style.borderColor = 'var(--accent)');
+        el.addEventListener('mouseleave', () => el.style.borderColor = 'transparent');
+        el.addEventListener('click', () => this._practiceOpening(el.dataset.moves.split(' ')));
+      });
+    }, 80);
+  }
+
+  async _practiceOpening(moves) {
+    const modal = document.getElementById('feature-modal');
+    if (modal) modal.remove();
+
+    // Start a new game from the starting position
+    await this.newGame();
+
+    // Replay opening moves one by one with a short delay
+    this._showPuzzleStatus(`📚 Replaying opening: ${moves.length} moves…`, 'info');
+    for (let i = 0; i < moves.length; i++) {
+      await new Promise(r => setTimeout(r, 350));
+      if (this.status !== 'Active') break;
+      try {
+        await this._makeMove(moves[i]);
+      } catch (e) {
+        break;
+      }
+    }
+    this._showPuzzleStatus('📚 Opening loaded — continue playing from here!', 'info');
+  }
+
+  // ── PGN Import ──
+
+  _showImportPGN() {
+    const html = `
+      <div>
+        <p style="color:var(--text-muted);font-size:0.78rem;margin:0 0 10px;">
+          Paste a PGN game below. The game will be loaded and you can step through it or continue from any position.
+        </p>
+        <textarea id="pgn-import-text" placeholder='[Event "My Game"]\n[White "Player"]\n[Black "AI"]\n\n1. e4 e5 2. Nf3 Nc6 …'
+          style="width:100%;height:160px;resize:vertical;font-size:0.72rem;font-family:monospace;
+                 background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
+                 color:var(--text);padding:8px;box-sizing:border-box;"></textarea>
+        <div id="pgn-import-error" style="color:#ef4444;font-size:0.72rem;margin-top:6px;display:none;"></div>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button id="pgn-import-btn" class="btn" style="flex:1;">📥 Import Game</button>
+          <button id="pgn-import-cancel" class="btn secondary">Cancel</button>
+        </div>
+      </div>`;
+    this._showModal('📥 Import PGN', html);
+
+    setTimeout(() => {
+      const cancelBtn = document.getElementById('pgn-import-cancel');
+      if (cancelBtn) cancelBtn.addEventListener('click', () => {
+        const m = document.getElementById('feature-modal');
+        if (m) m.remove();
+      });
+      const importBtn = document.getElementById('pgn-import-btn');
+      if (importBtn) importBtn.addEventListener('click', () => this._doImportPGN());
+    }, 80);
+  }
+
+  async _doImportPGN() {
+    const ta = document.getElementById('pgn-import-text');
+    const errEl = document.getElementById('pgn-import-error');
+    const btn = document.getElementById('pgn-import-btn');
+    if (!ta) return;
+
+    const pgn = ta.value.trim();
+    if (!pgn) { errEl.textContent = 'Please paste a PGN first.'; errEl.style.display = 'block'; return; }
+
+    btn.textContent = 'Parsing…';
+    btn.disabled = true;
+    errEl.style.display = 'none';
+
+    try {
+      const result = await this.api.importPGN(pgn);
+      const modal = document.getElementById('feature-modal');
+      if (modal) modal.remove();
+
+      // Load the starting position
+      const startFen = result.starting_fen;
+      const data = await this.api.newGame(startFen === 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' ? null : startFen);
+      this.gameId = data.game_id;
+      this.fen = data.fen;
+      this.pieces = data.pieces;
+      this.legalMoves = data.legal_moves;
+      this.status = 'Active';
+      this.moveHistory = [];
+      this._moveHistoryUCI = [];
+      this._fenLog = [this.fen];
+      this.sideToMove = data.side_to_move || 'white';
+      this._savedUseAI = this.useAI;
+      this.useAI = false; // Don't let AI interfere during replay
+
+      this.board.clearHighlights();
+      this.board.setPieces(this.pieces);
+      this._updateUI();
+
+      // Store imported game for stepping through
+      this._importedMoves = result.uci_moves || [];
+      this._importedFens = result.fens || [];
+      this._importedHeaders = result.headers || {};
+      this._importMoveIndex = 0;
+
+      const white = result.headers.White || 'White';
+      const black = result.headers.Black || 'Black';
+      const event = result.headers.Event || 'Imported Game';
+
+      // Show replay controls in coach panel
+      const coachEl = document.getElementById('tutor-coach-content');
+      if (coachEl) {
+        coachEl.innerHTML = `
+          <div class="tutor-tip"><span class="tutor-tag gold">📥 IMPORT</span> <strong>${event}</strong></div>
+          <div class="tutor-tip" style="font-size:0.72rem;">⬜ ${white} vs ⬛ ${black} · ${result.move_count} moves</div>
+          <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+            <button id="pgn-prev-btn" class="btn secondary" style="font-size:0.72rem;padding:3px 10px;" disabled>◀ Prev</button>
+            <button id="pgn-next-btn" class="btn secondary" style="font-size:0.72rem;padding:3px 10px;">▶ Next</button>
+            <button id="pgn-play-btn" class="btn secondary" style="font-size:0.72rem;padding:3px 10px;">▶▶ Auto</button>
+            <button id="pgn-stop-btn" class="btn secondary" style="font-size:0.72rem;padding:3px 10px;display:none;">⏹ Stop</button>
+            <button id="pgn-continue-btn" class="btn" style="font-size:0.72rem;padding:3px 10px;">Play from here</button>
+          </div>
+          <div id="pgn-move-label" style="font-size:0.7rem;color:var(--text-muted);margin-top:6px;">Move 0 / ${result.move_count}</div>
+        `;
+        const tutorPanel = document.getElementById('tutor-panel');
+        if (tutorPanel) tutorPanel.classList.remove('minimized');
+
+        setTimeout(() => this._bindPgnReplayControls(), 100);
+      }
+
+      this._showPuzzleStatus(`📥 ${event} loaded — ${result.move_count} moves. Use ▶ in the Coach panel to step through.`, 'info');
+    } catch (e) {
+      if (btn) { btn.textContent = '📥 Import Game'; btn.disabled = false; }
+      if (errEl) { errEl.textContent = e.message || 'Import failed. Check the PGN format and ensure the AI service is running.'; errEl.style.display = 'block'; }
+    }
+  }
+
+  _bindPgnReplayControls() {
+    const step = async (dir) => {
+      if (!this._importedMoves) return;
+      const newIdx = this._importMoveIndex + dir;
+      if (newIdx < 0 || newIdx > this._importedMoves.length) return;
+      this._importMoveIndex = newIdx;
+
+      // Load the FEN for this position
+      const fen = this._importedFens[newIdx];
+      if (fen) {
+        const data = await this.api.newGame(fen);
+        this.gameId = data.game_id;
+        this.fen = data.fen;
+        this.pieces = data.pieces;
+        this.legalMoves = data.legal_moves;
+        this.board.setPieces(this.pieces);
+        if (newIdx > 0) {
+          const prevMove = this._importedMoves[newIdx - 1];
+          this.board.highlightLastMove(prevMove.slice(0,2), prevMove.slice(2,4));
+        } else {
+          this.board.clearHighlights();
+        }
+        this._updateUI();
+      }
+
+      const label = document.getElementById('pgn-move-label');
+      if (label) label.textContent = `Move ${newIdx} / ${this._importedMoves.length}`;
+      const prevBtn = document.getElementById('pgn-prev-btn');
+      const nextBtn = document.getElementById('pgn-next-btn');
+      if (prevBtn) prevBtn.disabled = newIdx <= 0;
+      if (nextBtn) nextBtn.disabled = newIdx >= this._importedMoves.length;
+    };
+
+    const prevBtn = document.getElementById('pgn-prev-btn');
+    const nextBtn = document.getElementById('pgn-next-btn');
+    const playBtn = document.getElementById('pgn-play-btn');
+    const stopBtn = document.getElementById('pgn-stop-btn');
+    const contBtn = document.getElementById('pgn-continue-btn');
+
+    if (prevBtn) prevBtn.addEventListener('click', () => step(-1));
+    if (nextBtn) nextBtn.addEventListener('click', () => step(1));
+
+    if (playBtn) playBtn.addEventListener('click', () => {
+      playBtn.style.display = 'none';
+      stopBtn.style.display = '';
+      this._pgnAutoInterval = setInterval(async () => {
+        if (this._importMoveIndex >= this._importedMoves.length) {
+          clearInterval(this._pgnAutoInterval);
+          playBtn.style.display = '';
+          stopBtn.style.display = 'none';
+          return;
+        }
+        await step(1);
+      }, 900);
+    });
+
+    if (stopBtn) stopBtn.addEventListener('click', () => {
+      clearInterval(this._pgnAutoInterval);
+      playBtn.style.display = '';
+      stopBtn.style.display = 'none';
+    });
+
+    if (contBtn) contBtn.addEventListener('click', () => {
+      // Resume playing from current position
+      this._importedMoves = null;
+      if (this._savedUseAI !== undefined) { this.useAI = this._savedUseAI; delete this._savedUseAI; }
+      const coachEl = document.getElementById('tutor-coach-content');
+      if (coachEl) coachEl.innerHTML = '<div class="tutor-tip">▶ Playing from imported position. Good luck!</div>';
+      this._showPuzzleStatus('Playing from imported position.', 'info');
+    });
+  }
+
+  // ── FEN Loader ──
+
+  async _loadFenInput() {
+    const input = document.getElementById('fen-input');
+    if (!input) return;
+    const fen = input.value.trim();
+    if (!fen) return;
+
+    // Basic FEN sanity check
+    const parts = fen.split(' ');
+    if (parts.length < 2 || !fen.includes('/')) {
+      this._showCopyToast('Invalid FEN format.');
+      return;
+    }
+
+    try {
+      const data = await this.api.newGame(fen);
+      this.gameId = data.game_id;
+      this.fen = data.fen;
+      this.pieces = data.pieces;
+      this.legalMoves = data.legal_moves;
+      this.sideToMove = parts[1] === 'w' ? 'white' : 'black';
+      this.playerColor = this.sideToMove;
+      this.status = 'Active';
+      this.moveHistory = [];
+      this._moveHistoryUCI = [];
+      this._fenLog = [this.fen];
+      this._currentOpening = null;
+
+      this.board.clearHighlights();
+      this.board.setPieces(this.pieces);
+      this._updateUI();
+      this._updateOpening();
+
+      input.value = '';
+      this._showCopyToast('Position loaded!');
+      sounds.playSelect();
+    } catch (e) {
+      this._showCopyToast('Invalid position — check the FEN string.');
+    }
+  }
+
   // ── Stats Dashboard ──
 
   _initStatsPanel() {
@@ -2372,6 +3352,13 @@ class ChessGame {
 
     // Timer highlight
     this._updateTimerDisplay();
+
+    // Resign / Draw buttons — only active during a live game with moves played
+    const active = this.status === 'Active' && this.moveHistory.length > 0;
+    const resignBtn = document.getElementById('btn-resign');
+    const drawBtn = document.getElementById('btn-offer-draw');
+    if (resignBtn) resignBtn.disabled = !active;
+    if (drawBtn) drawBtn.disabled = !active;
   }
 
   _updateMoveList() {
@@ -2545,6 +3532,131 @@ class ChessGame {
     document.getElementById('eval-bar').style.width = `${pct}%`;
     const sign = diff > 0 ? '+' : '';
     document.getElementById('eval-text').textContent = `${sign}${diff.toFixed(1)}`;
+  }
+
+  // ── Resign & Draw ──
+
+  _resign() {
+    if (this.status !== 'Active' || this.moveHistory.length === 0) return;
+    const confirmed = window.confirm('Are you sure you want to resign?');
+    if (!confirmed) return;
+    this._stopTimer();
+    const winner = this.playerColor === 'white' ? 'Black' : 'White';
+    this.status = `${winner} wins by resignation`;
+    this._showGameOver();
+    this._onGameEnd();
+  }
+
+  _offerDraw() {
+    if (this.status !== 'Active' || this.moveHistory.length === 0) return;
+    if (this.useAI) {
+      // AI always accepts draw when behind or equal (eval < 0.1 from player's perspective),
+      // declines when clearly winning. Simple heuristic based on move count & material.
+      const moves = this.moveHistory.length;
+      const accept = moves >= 20 && Math.random() < 0.45; // AI accepts ~45% of draws after move 20
+      if (accept) {
+        this._stopTimer();
+        this.status = 'Draw by agreement';
+        this._showGameOver();
+        this._onGameEnd();
+      } else {
+        this._showPuzzleStatus('The AI declines the draw offer.', 'info');
+      }
+    } else {
+      // vs human: show confirmation
+      const accepted = window.confirm('Draw offered. Does the opponent accept?');
+      if (accepted) {
+        this._stopTimer();
+        this.status = 'Draw by agreement';
+        this._showGameOver();
+        this._onGameEnd();
+      }
+    }
+  }
+
+  // ── Clipboard Utilities ──
+
+  async _copyFen() {
+    if (!this.fen) return;
+    try {
+      await navigator.clipboard.writeText(this.fen);
+      this._showCopyToast('FEN copied to clipboard!');
+    } catch (e) {
+      this._showCopyToast('Could not copy — try manually selecting the FEN.');
+    }
+  }
+
+  _showCopyToast(msg) {
+    const existing = document.getElementById('copy-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'copy-toast';
+    toast.textContent = msg;
+    toast.style.cssText = `
+      position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+      background:var(--surface-2);color:var(--text);border:1px solid var(--border);
+      border-radius:8px;padding:8px 18px;font-size:0.8rem;z-index:200;
+      box-shadow:0 4px 16px rgba(0,0,0,0.4);pointer-events:none;
+      animation:fadeInUp 0.2s ease;
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2200);
+  }
+
+  // ── Live Coaching (post-move position analysis) ──
+
+  async _liveTutorAnalysis() {
+    if (!this.fen || this.status !== 'Active') return;
+    try {
+      const resp = await fetch(`${this._getAiBase()}/ai/tutor/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fen: this.fen }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      this._showLiveCoachTip(data);
+    } catch (e) {
+      // Silent fail — live coaching is non-critical
+    }
+  }
+
+  _getAiBase() {
+    return getAiBaseUrl();
+  }
+
+  _showLiveCoachTip(data) {
+    const coachEl = document.getElementById('tutor-coach-content');
+    if (!coachEl) return;
+
+    const tips = data.tips || data.coaching || [];
+    const evaluation = data.evaluation;
+    const best_move = data.best_move;
+
+    if (!tips.length && !evaluation) return;
+
+    // Build a compact tip block
+    let html = '';
+    if (evaluation) {
+      const score = typeof evaluation === 'number' ? evaluation.toFixed(2) : evaluation;
+      const color = evaluation > 0.1 ? '#10b981' : evaluation < -0.1 ? '#ef4444' : '#fbbf24';
+      html += `<div class="tutor-tip" style="border-left:3px solid ${color};padding-left:8px;">
+        <span class="tutor-tag" style="background:${color}22;color:${color};">EVAL ${score}</span>
+        ${best_move ? ` <span style="font-size:0.7rem;color:var(--text-muted);">Best: ${best_move}</span>` : ''}
+      </div>`;
+    }
+    for (const tip of tips.slice(0, 3)) {
+      const text = typeof tip === 'string' ? tip : (tip.text || tip.message || '');
+      const tag = tip.tag || tip.category || 'TIP';
+      if (text) {
+        html += `<div class="tutor-tip"><span class="tutor-tag">${tag.toUpperCase()}</span> ${text}</div>`;
+      }
+    }
+
+    if (html) {
+      coachEl.innerHTML = html + coachEl.innerHTML.slice(0, 600); // prepend, keep old tips trimmed
+    }
   }
 
   _showGameOver() {

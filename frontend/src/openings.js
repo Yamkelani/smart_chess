@@ -284,6 +284,248 @@ const OPENING_BOOK = {
     eco: 'A02',
     desc: 'An uncommon but playable system controlling e5.',
   },
+
+  // ── Ruy Lopez Variations ──
+  'e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1': {
+    name: 'Ruy Lopez: Closed Variation',
+    eco: 'C84',
+    desc: 'White castles, preparing a kingside attack while maintaining the pin.',
+  },
+  'e2e4 e7e5 g1f3 b8c6 f1b5 f8c5': {
+    name: 'Ruy Lopez: Classical Defense',
+    eco: 'C64',
+    desc: 'Black develops actively with the bishop, planning ...Nf6 and ...d6.',
+  },
+  'e2e4 e7e5 g1f3 b8c6 f1b5 d7d6': {
+    name: 'Ruy Lopez: Steinitz Defense',
+    eco: 'C62',
+    desc: 'A passive but solid response, keeping the center closed.',
+  },
+
+  // ── Italian Variations ──
+  'e2e4 e7e5 g1f3 b8c6 f1c4 f8c5 c2c3 g8f6 d2d4': {
+    name: 'Giuoco Piano: Main Line',
+    eco: 'C54',
+    desc: 'White opens the center with d4. A critical position full of tactics.',
+  },
+  'e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d4': {
+    name: 'Two Knights: Fried Liver Attack',
+    eco: 'C57',
+    desc: 'White sacrifices a knight on f7 for a fierce attacking initiative!',
+  },
+
+  // ── Sicilian Variations ──
+  'e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 g7g6': {
+    name: 'Sicilian: Dragon',
+    eco: 'B70',
+    desc: "Black fianchettoes the king's bishop. White attacks on the queenside.",
+  },
+  'e2e4 c7c5 g1f3 d7d6 d2d4 c5d4 f3d4 g8f6 b1c3 e7e6': {
+    name: 'Sicilian: Scheveningen',
+    eco: 'B80',
+    desc: 'A solid formation: Black builds a pawn chain on d6-e6.',
+  },
+  'e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 g7g6': {
+    name: 'Sicilian: Accelerated Dragon',
+    eco: 'B34',
+    desc: 'Black fianchettoes immediately, hoping to avoid the Yugoslav Attack.',
+  },
+  'e2e4 c7c5 b1c3': {
+    name: 'Sicilian: Closed',
+    eco: 'B25',
+    desc: 'White avoids open Sicilian theory with a solid setup.',
+  },
+  'e2e4 c7c5 g1f3 e7e6 d2d4 c5d4 f3d4 a7a6': {
+    name: 'Sicilian: Kan Variation',
+    eco: 'B41',
+    desc: 'A flexible system: Black prepares ...b5 and keeps many options.',
+  },
+  'e2e4 c7c5 g1f3 b8c6 d2d4 c5d4 f3d4 e7e6 b1c3 d8c7': {
+    name: 'Sicilian: Taimanov',
+    eco: 'B44',
+    desc: 'Black develops the queen to c7, planning flexible piece play.',
+  },
+
+  // ── Caro-Kann Variations ──
+  'e2e4 c7c6 d2d4 d7d5 b1c3 d5e4 c3e4': {
+    name: 'Caro-Kann: Classical',
+    eco: 'B18',
+    desc: 'Black exchanges on e4 and develops the light-squared bishop outside the chain.',
+  },
+  'e2e4 c7c6 d2d4 d7d5 e4e5': {
+    name: 'Caro-Kann: Advance',
+    eco: 'B12',
+    desc: 'White grabs space. Black attacks the chain with ...c5 and ...Bf5.',
+  },
+  'e2e4 c7c6 d2d4 d7d5 b1d2': {
+    name: 'Caro-Kann: Karpov System',
+    eco: 'B17',
+    desc: "Karpov's favorite — d2 knight avoids pins, planning f3 and e4.",
+  },
+
+  // ── French Variations ──
+  'e2e4 e7e6 d2d4 d7d5 b1c3 g8f6 c1g5': {
+    name: 'French: Classical Main Line',
+    eco: 'C11',
+    desc: 'White pins the knight, aiming for e5. A major theoretical battleground.',
+  },
+  'e2e4 e7e6 d2d4 d7d5 e4e5 c7c5': {
+    name: 'French: Advance — Main Line',
+    eco: 'C02',
+    desc: 'Black immediately attacks the center with ...c5. Sharp play follows.',
+  },
+  'e2e4 e7e6 d2d4 d7d5 b1c3 f8b4': {
+    name: 'French: Winawer',
+    eco: 'C15',
+    desc: 'Black pins the knight immediately. Creates pawn structure imbalances.',
+  },
+
+  // ── Queen's Gambit Variations ──
+  'd2d4 d7d5 c2c4 e7e6 b1c3 g8f6 c1g5': {
+    name: "Queen's Gambit Declined: Orthodox",
+    eco: 'D50',
+    desc: 'The main line QGD. White pins the f6 knight, increasing pressure on d5.',
+  },
+  'd2d4 d7d5 c2c4 e7e6 g1f3 g8f6 b1c3 f8e7': {
+    name: "Queen's Gambit Declined: Classical",
+    eco: 'D55',
+    desc: 'Black develops solidly. White has long-term queenside pressure.',
+  },
+  'd2d4 d7d5 c2c4 c7c6 g1f3 g8f6 b1c3': {
+    name: 'Semi-Slav Defense',
+    eco: 'D43',
+    desc: 'A hybrid of the Slav and QGD. Leads to the famous Meran and Moscow variations.',
+  },
+  'd2d4 d7d5 c2c4 c7c6 g1f3 g8f6 b1c3 e7e6 e2e3': {
+    name: 'Semi-Slav: Meran',
+    eco: 'D47',
+    desc: 'One of the sharpest lines in all of chess. Mutual attacks on opposite wings.',
+  },
+
+  // ── King's Indian Variations ──
+  'd2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g1f3 e1g1': {
+    name: "King's Indian: Classical",
+    eco: 'E91',
+    desc: 'White builds the classical center. Black will counter with ...e5 or ...c5.',
+  },
+  'd2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 f2f3': {
+    name: "King's Indian: Sämisch",
+    eco: 'E81',
+    desc: 'White plays f3 to support e4 and prepare a kingside attack. Very aggressive.',
+  },
+  'd2d4 g8f6 c2c4 g7g6 b1c3 f8g7 e2e4 d7d6 g2g3': {
+    name: "King's Indian: Averbakh",
+    eco: 'E73',
+    desc: 'White fianchettoes and aims for long-term positional pressure.',
+  },
+
+  // ── Nimzo-Indian Variations ──
+  'd2d4 g8f6 c2c4 e7e6 b1c3 f8b4 e2e3': {
+    name: 'Nimzo-Indian: Rubinstein',
+    eco: 'E40',
+    desc: "White solidly reinforces the center. Black aims to exploit the doubled c-pawns.",
+  },
+  'd2d4 g8f6 c2c4 e7e6 b1c3 f8b4 d1c2': {
+    name: 'Nimzo-Indian: Classical',
+    eco: 'E30',
+    desc: 'White avoids doubled pawns. A major theoretical battleground.',
+  },
+  'd2d4 g8f6 c2c4 e7e6 b1c3 f8b4 f2f3': {
+    name: 'Nimzo-Indian: Sämisch',
+    eco: 'E26',
+    desc: 'An aggressive attempt to keep the bishop pair and build a strong center.',
+  },
+
+  // ── Grünfeld Variations ──
+  'd2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5 e2e4': {
+    name: 'Grünfeld: Exchange',
+    eco: 'D85',
+    desc: 'White takes the pawn and builds a massive center. Black destroys it with ...c5.',
+  },
+  'd2d4 g8f6 c2c4 g7g6 b1c3 d7d5 g1f3': {
+    name: 'Grünfeld: Russian System',
+    eco: 'D97',
+    desc: 'White plays Nf3 and prepares Qb3 to pressure d5 and b7.',
+  },
+
+  // ── English Variations ──
+  'c2c4 e7e5 b1c3': {
+    name: 'English: Four Knights',
+    eco: 'A28',
+    desc: 'Both sides develop knights naturally. Can transpose to many openings.',
+  },
+  'c2c4 g8f6 b1c3 e7e6 e2e4': {
+    name: 'English: King\'s Indian Attack',
+    eco: 'A15',
+    desc: 'White builds a broad center and prepares kingside expansion.',
+  },
+  'c2c4 c7c5': {
+    name: 'English: Symmetrical',
+    eco: 'A30',
+    desc: 'Mirror positions. Both sides fight for control of d4 and d5.',
+  },
+
+  // ── Other first-move options ──
+  'd2d4 d7d5 g1f3': {
+    name: "Queen's Pawn: Torre Attack",
+    eco: 'D03',
+    desc: 'White delays c4, playing Nf3 and Bg5 for a solid, pressure-based setup.',
+  },
+  'e2e4 e7e5 g1f3 b8c6 d2d4 e5d4 f3d4': {
+    name: 'Scotch: Main Line',
+    eco: 'C45',
+    desc: 'After 3.d4 exd4 4.Nxd4 — the main battleground of the Scotch Game.',
+  },
+  'e2e4 e7e5 g1f3 b8c6 d2d4 e5d4 f3d4 f8c5': {
+    name: 'Scotch: Classical (Mieses–Tarrasch)',
+    eco: 'C45',
+    desc: "Black develops the bishop actively. A natural and ambitious response.",
+  },
+  'e2e4 e7e5 b1c3 g8f6 f2f4': {
+    name: 'Vienna Gambit',
+    eco: 'C28',
+    desc: 'After Nc3, White offers the Vienna Gambit with f4 — very aggressive!',
+  },
+  'd2d4 f7f5 g2g3': {
+    name: 'Dutch: Leningrad',
+    eco: 'A81',
+    desc: "White fianchettoes against the Dutch. Black's Leningrad setup is very dynamic.",
+  },
+  'd2d4 f7f5 c2c4 e7e6 g1f3 g8f6 g2g3': {
+    name: 'Dutch: Classical',
+    eco: 'A92',
+    desc: 'The classical Dutch setup. Black prepares ...d6 and eventual ...e5.',
+  },
+  'd2d4 g8f6 c2c4 c7c5 d4d5': {
+    name: 'Modern Benoni',
+    eco: 'A60',
+    desc: 'Black creates a queenside pawn majority. Dynamic counterplay vs. space.',
+  },
+  'd2d4 g8f6 c2c4 g7g6 b1c3 d7d5 c4d5 f6d5 e2e4 d5c3 b2c3 f8g7': {
+    name: 'Grünfeld: Exchange with 7.Bc4',
+    eco: 'D86',
+    desc: 'One of the sharpest Grünfeld lines. White aims for fast kingside play.',
+  },
+  'e2e4 d7d5 e4d5': {
+    name: 'Scandinavian: Exchange',
+    eco: 'B01',
+    desc: 'White takes the pawn. Black usually recaptures with the queen then retreats.',
+  },
+  'e2e4 d7d5 e4d5 d8d5 b1c3 d5a5': {
+    name: 'Scandinavian: Classical',
+    eco: 'B01',
+    desc: 'Black retreats the queen to a5 — the main classical line.',
+  },
+  'e2e4 e7e5 g1f3 g8f6 f3e5 d7d6': {
+    name: "Petrov's Defense: Classical",
+    eco: 'C42',
+    desc: "After 3.Nxe5 d6 — Black chases the knight. Very solid and drawish.",
+  },
+  'd2d4 e7e6 c2c4 f7f5': {
+    name: 'Dutch Defense',
+    eco: 'A80',
+    desc: 'Reaching Dutch via 1.d4 e6 2.c4 f5 — Black fights for e4.',
+  },
 };
 
 /**
@@ -318,4 +560,61 @@ export function getAllOpenings() {
     moves: moves.split(' '),
     ...data,
   }));
+}
+
+/**
+ * Opening categories for the Explorer panel.
+ */
+export const OPENING_CATEGORIES = [
+  {
+    id: 'open',
+    name: 'Open Games (1.e4 e5)',
+    icon: '♟️',
+    color: '#f59e0b',
+    firstMoves: ['e2e4 e7e5'],
+  },
+  {
+    id: 'semi_open',
+    name: 'Semi-Open (1.e4 ...)',
+    icon: '🔥',
+    color: '#ef4444',
+    firstMoves: ['e2e4 c7c5', 'e2e4 e7e6', 'e2e4 c7c6', 'e2e4 d7d6', 'e2e4 g7g6', 'e2e4 d7d5'],
+  },
+  {
+    id: 'closed',
+    name: 'Closed Games (1.d4 d5)',
+    icon: '🏰',
+    color: '#3b82f6',
+    firstMoves: ['d2d4 d7d5'],
+  },
+  {
+    id: 'indian',
+    name: 'Indian Defenses (1.d4 Nf6)',
+    icon: '🐘',
+    color: '#8b5cf6',
+    firstMoves: ['d2d4 g8f6'],
+  },
+  {
+    id: 'flank',
+    name: 'Flank Openings',
+    icon: '🌀',
+    color: '#10b981',
+    firstMoves: ['c2c4', 'f2f4', 'd2d4 f7f5'],
+  },
+];
+
+/**
+ * Get openings that belong to a given category by matching first-move prefixes.
+ */
+export function getOpeningsByCategory(categoryId) {
+  const cat = OPENING_CATEGORIES.find(c => c.id === categoryId);
+  if (!cat) return [];
+  const all = Object.entries(OPENING_BOOK).map(([key, data]) => ({
+    key,
+    moves: key.split(' '),
+    ...data,
+  }));
+  return all.filter(o =>
+    cat.firstMoves.some(prefix => o.key === prefix || o.key.startsWith(prefix + ' '))
+  ).sort((a, b) => a.moves.length - b.moves.length);
 }
