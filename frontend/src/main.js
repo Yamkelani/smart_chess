@@ -311,6 +311,14 @@ class ChessGame {
     bind('cam-top', 'top');
     bind('cam-low', 'low');
     bind('cam-side', 'side');
+
+    // Free-rotate toggle
+    const freeRotateToggle = document.getElementById('free-rotate-toggle');
+    if (freeRotateToggle) {
+      freeRotateToggle.addEventListener('change', (e) => {
+        this.board.setFreeRotate(e.target.checked);
+      });
+    }
   }
 
   _initTutor() {

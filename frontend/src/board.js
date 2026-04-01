@@ -145,6 +145,9 @@ export class ChessBoard3D {
     this._liftedPieceSq = null;
     this._liftedPieceOrigY = 0.04;
 
+    // Free-rotate mode (allows left-click drag rotation)
+    this._freeRotateMode = false;
+
     this._initScene();
     this._initBoard();
     this._initLights();
@@ -222,8 +225,9 @@ export class ChessBoard3D {
 
     this.canvas.addEventListener('pointerdown', (e) => {
       // Allow right-click and middle-click for orbit
-      // Also allow left-click drag when holding Shift or Alt
-      if (e.button === 2 || e.button === 1 || (e.button === 0 && (e.shiftKey || e.altKey))) {
+      // Also allow left-click drag when holding Shift/Alt, or when free-rotate mode is on
+      const leftOrbit = e.button === 0 && (e.shiftKey || e.altKey || this._freeRotateMode);
+      if (e.button === 2 || e.button === 1 || leftOrbit) {
         dragging = true;
         dragButton = e.button;
         lastX = e.clientX;
@@ -253,6 +257,58 @@ export class ChessBoard3D {
     this.canvas.addEventListener('wheel', (e) => {
       this.cameraOrbitDist = Math.max(5, Math.min(25, this.cameraOrbitDist + e.deltaY * 0.01));
       this._updateCameraFromOrbit();
+    });
+
+    // ── Touch gesture support (rotate + pinch-zoom) ──
+    let touches = [];
+    let lastTouchDist = 0;
+    let lastTouchMidX = 0;
+    let lastTouchMidY = 0;
+
+    this.canvas.addEventListener('touchstart', (e) => {
+      touches = [...e.touches];
+      if (touches.length === 2) {
+        e.preventDefault();
+        const dx = touches[1].clientX - touches[0].clientX;
+        const dy = touches[1].clientY - touches[0].clientY;
+        lastTouchDist = Math.sqrt(dx * dx + dy * dy);
+        lastTouchMidX = (touches[0].clientX + touches[1].clientX) / 2;
+        lastTouchMidY = (touches[0].clientY + touches[1].clientY) / 2;
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const t0 = e.touches[0], t1 = e.touches[1];
+
+        // Pinch-to-zoom
+        const dx = t1.clientX - t0.clientX;
+        const dy = t1.clientY - t0.clientY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (lastTouchDist > 0) {
+          const scale = lastTouchDist / dist;
+          this.cameraOrbitDist = Math.max(5, Math.min(25, this.cameraOrbitDist * scale));
+        }
+        lastTouchDist = dist;
+
+        // Two-finger drag to rotate
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+        const mdx = midX - lastTouchMidX;
+        const mdy = midY - lastTouchMidY;
+        this.cameraOrbitAngle -= mdx * 0.005;
+        this.cameraOrbitPitch = Math.max(0.05, Math.min(1.55, this.cameraOrbitPitch + mdy * 0.005));
+        lastTouchMidX = midX;
+        lastTouchMidY = midY;
+
+        this._updateCameraFromOrbit();
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchend', () => {
+      touches = [];
+      lastTouchDist = 0;
     });
   }
 
@@ -1915,5 +1971,11 @@ export class ChessBoard3D {
     this.pieceMeshes.forEach((mesh) => {
       mesh.visible = !this._blindfoldMode;
     });
+  }
+
+  // ── Free-rotate mode ──
+
+  setFreeRotate(enabled) {
+    this._freeRotateMode = !!enabled;
   }
 }
