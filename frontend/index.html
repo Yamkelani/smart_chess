@@ -1874,6 +1874,32 @@
         <span class="shortcut-key">Ctrl+Y <span class="desc">Redo</span></span>
       </div>
 
+      <div class="section-header">Online</div>
+      <div class="gap-6">
+        <div class="btn-row">
+          <button class="btn" id="btn-multiplayer" style="background:linear-gradient(135deg,#6c5ce7,#00d2ff);border:none">🌐 Play Online</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn secondary" id="btn-leaderboard" title="View global rankings">🏆 Leaderboard</button>
+          <button class="btn secondary" id="btn-daily-puzzle" title="Today's puzzle challenge" style="position:relative">
+            📅 Daily Puzzle
+            <span id="daily-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:var(--accent-secondary);border-radius:50%;border:2px solid var(--bg-panel)"></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="section-header">Variant</div>
+      <div class="gap-4">
+        <select id="variant-select">
+          <option value="standard" selected>♟️ Standard Chess</option>
+          <option value="chess960">♚ Chess960 (Fischer Random)</option>
+          <option value="kingofthehill">⛰️ King of the Hill</option>
+          <option value="threecheck">3️⃣ Three-Check</option>
+          <option value="atomic">💥 Atomic</option>
+          <option value="crazyhouse">🏠 Crazyhouse</option>
+        </select>
+      </div>
+
       <div class="section-header">More</div>
       <div class="gap-6">
         <div class="btn-row">
@@ -1881,8 +1907,16 @@
           <button class="btn secondary" id="btn-practice" title="Practice tactics and strategies">🎯 Practice</button>
         </div>
         <div class="btn-row">
+          <button class="btn secondary" id="btn-timed-drills" title="Puzzle Rush — solve puzzles against the clock">⏱️ Timed Drills</button>
           <button class="btn secondary" id="btn-openings" title="Browse opening theory">📚 Openings</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn secondary" id="btn-position-editor" title="Set up custom positions">🔧 Editor</button>
+          <button class="btn secondary" id="btn-blindfold" title="Hide pieces for blindfold training">🙈 Blindfold</button>
+        </div>
+        <div class="btn-row">
           <button class="btn secondary" id="btn-import-pgn" title="Import a game from PGN">📥 Import PGN</button>
+          <button class="btn secondary" id="btn-cosmetics" title="Unlock piece sets, themes, and titles">✨ Cosmetics</button>
         </div>
         <div class="btn-row">
           <button class="btn secondary" id="btn-stats">📈 Stats</button>

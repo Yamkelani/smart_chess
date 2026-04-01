@@ -4,7 +4,8 @@
  * Ties together the 3D board, API communication, UI controls,
  * sound effects, keyboard shortcuts, move timer, theme selector,
  * opening explorer, rating system, achievements, PGN export,
- * AI personalities, puzzle mode, game review, and undo/redo.
+ * AI personalities, puzzle mode, game review, undo/redo,
+ * multiplayer, daily puzzles, cosmetics, timed drills, and position editor.
  */
 import { ChessBoard3D } from './board.js';
 import { ChessAPI } from './api.js';
@@ -14,6 +15,11 @@ import { updateRating, getRating, getRankTitle } from './rating.js';
 import { checkAchievements, getAllAchievements, getUnlockedCount, getTotalCount, triggerAchievement } from './achievements.js';
 import { toPGN, downloadPGN, copyPGN, saveGame, loadHistory, formatGameSummary } from './pgn.js';
 import { initBridge, isTauri, getAiBaseUrl } from './bridge.js';
+import { MultiplayerManager, EMOTES } from './multiplayer.js';
+import { getDailyPuzzle, isDailySolved, solveDailyPuzzle, getDailyStats } from './daily-puzzle.js';
+import { PositionEditor, EDITOR_PIECES } from './editor.js';
+import { TimedDrillSession, TIMED_DRILL_CONFIGS, getTimedDrillStats, getBestScore } from './timed-drills.js';
+import { refreshUnlocks, addXP, getXPState, getCosmeticsState, PIECE_SETS, TITLES, BOARD_BACKGROUNDS, getActivePieceSet, setActivePieceSet, getActiveTitle, setActiveTitle, getActiveBackground, setActiveBackground, getUnlockedPieceSets, getUnlockedBoards, getUnlockedTitles, getUnlockedBackgrounds } from './cosmetics.js';
 
 // Piece symbols for captured display (lowercase keys to match engine API)
 const PIECE_UNICODE = {
@@ -101,6 +107,27 @@ class ChessGame {
     this._dragging = false;
     this._dragPieceSq = null;
 
+    // Multiplayer
+    this.multiplayer = new MultiplayerManager();
+    this._multiplayerActive = false;
+
+    // Variant
+    this._gameVariant = 'standard';
+    this._chess960Id = null;
+
+    // Blindfold mode
+    this._blindfoldMode = false;
+
+    // Position editor
+    this._editorMode = false;
+    this._positionEditor = new PositionEditor();
+
+    // Timed drill session
+    this._timedDrillSession = null;
+
+    // Daily puzzle
+    this._dailyPuzzleMode = false;
+
     // Init 3D board
     const canvas = document.getElementById('chess-canvas');
     this.board = new ChessBoard3D(canvas);
@@ -121,6 +148,15 @@ class ChessGame {
     this._initStatsPanel();
     this._initClockModes();
     this._initDragAndDrop();
+    this._initMultiplayer();
+    this._initDailyPuzzle();
+    this._initTimedDrills();
+    this._initPositionEditor();
+    this._initBlindfoldMode();
+    this._initVariantSelector();
+    this._initCosmeticsPanel();
+    this._initLeaderboard();
+    this._checkUrlParams();
     this.newGame();
 
     // Poll AI learning status every 10 seconds
@@ -3795,6 +3831,769 @@ class ChessGame {
       topClock.textContent = fmt(playerIsWhite ? this.blackTime : this.whiteTime);
       botClock.textContent = fmt(playerIsWhite ? this.whiteTime : this.blackTime);
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  MULTIPLAYER
+  // ══════════════════════════════════════════════════════════════
+
+  _initMultiplayer() {
+    this.multiplayer.on('room-created', (data) => {
+      this._showMultiplayerLobby(data);
+    });
+    this.multiplayer.on('room-joined', (data) => {
+      this._startMultiplayerGame(data);
+    });
+    this.multiplayer.on('game-started', (data) => {
+      this._startMultiplayerGame(data);
+    });
+    this.multiplayer.on('state-update', (data) => {
+      if (!this._multiplayerActive) return;
+      this._syncMultiplayerState(data);
+    });
+    this.multiplayer.on('chat', (msg) => {
+      this._addChatMessage(msg);
+    });
+    this.multiplayer.on('game-over', (data) => {
+      this._handleMultiplayerGameOver(data);
+    });
+    this.multiplayer.on('left', () => {
+      this._multiplayerActive = false;
+      this._closeModal('multiplayer-modal');
+    });
+
+    const mpBtn = document.getElementById('btn-multiplayer');
+    if (mpBtn) mpBtn.addEventListener('click', () => this._showMultiplayerPanel());
+  }
+
+  _showMultiplayerPanel() {
+    const html = `
+      <div style="min-width:340px">
+        <h3 style="margin-bottom:16px;text-align:center">🌐 Online Play</h3>
+        <div style="margin-bottom:12px">
+          <label style="font-size:0.8rem;color:var(--text-secondary)">Your Name</label>
+          <input type="text" id="mp-name" value="${this.multiplayer.playerName}" 
+            style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border-glow);background:var(--bg-card);color:var(--text-primary);font-family:Inter,sans-serif;margin-top:4px" />
+        </div>
+        <div class="btn-row" style="margin-bottom:16px">
+          <button class="btn" id="mp-create">Create Room</button>
+          <button class="btn secondary" id="mp-join-btn">Join Room</button>
+        </div>
+        <div id="mp-join-section" style="display:none;margin-bottom:16px">
+          <label style="font-size:0.8rem;color:var(--text-secondary)">Room Code</label>
+          <div style="display:flex;gap:6px;margin-top:4px">
+            <input type="text" id="mp-code" placeholder="ABCDEF" maxlength="6"
+              style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border-glow);background:var(--bg-card);color:var(--text-primary);font-family:JetBrains Mono,monospace;text-transform:uppercase;font-size:1.1rem;letter-spacing:2px;text-align:center" />
+            <button class="btn" id="mp-join-go" style="width:80px">Join</button>
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:0.8rem;color:var(--text-secondary)">Variant</label>
+          <select id="mp-variant" style="margin-top:4px">
+            <option value="standard">Standard</option>
+            <option value="chess960">Chess960</option>
+            <option value="kingofthehill">King of the Hill</option>
+            <option value="threecheck">Three-Check</option>
+          </select>
+        </div>
+        <div id="mp-lobby-list" style="margin-top:16px">
+          <h4 style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px">OPEN ROOMS</h4>
+          <div id="mp-rooms" style="max-height:200px;overflow-y:auto"></div>
+        </div>
+      </div>
+    `;
+    this._showFeatureModal('multiplayer-modal', html);
+    this._loadOpenRooms();
+
+    document.getElementById('mp-name').addEventListener('change', (e) => {
+      this.multiplayer.setPlayerName(e.target.value.trim() || 'Player');
+    });
+    document.getElementById('mp-create').addEventListener('click', async () => {
+      const variant = document.getElementById('mp-variant').value;
+      try {
+        await this.multiplayer.createRoom({ variant, color: this.playerColor });
+      } catch (e) { console.warn('Create room failed:', e); }
+    });
+    document.getElementById('mp-join-btn').addEventListener('click', () => {
+      const sec = document.getElementById('mp-join-section');
+      sec.style.display = sec.style.display === 'none' ? 'block' : 'none';
+    });
+    document.getElementById('mp-join-go').addEventListener('click', async () => {
+      const code = document.getElementById('mp-code').value.trim();
+      if (code.length !== 6) return;
+      try { await this.multiplayer.joinRoom(code); } catch (e) {
+        alert(e.message || 'Could not join room');
+      }
+    });
+  }
+
+  async _loadOpenRooms() {
+    try {
+      const rooms = await this.multiplayer.listRooms();
+      const container = document.getElementById('mp-rooms');
+      if (!container) return;
+      if (rooms.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px">No open rooms. Create one!</div>';
+        return;
+      }
+      container.innerHTML = rooms.map(r => `
+        <div style="display:flex;align-items:center;padding:8px;border:1px solid var(--border-glow);border-radius:8px;margin-bottom:6px;cursor:pointer" 
+          data-code="${r.room_code}" class="mp-room-item">
+          <span style="flex:1;font-weight:600">${r.host_name}</span>
+          <span style="font-size:0.75rem;color:var(--text-secondary)">${r.variant}</span>
+          <span style="font-family:JetBrains Mono;font-size:0.8rem;margin-left:8px;color:var(--accent-cyan)">${r.room_code}</span>
+        </div>
+      `).join('');
+      container.querySelectorAll('.mp-room-item').forEach(el => {
+        el.addEventListener('click', async () => {
+          try { await this.multiplayer.joinRoom(el.dataset.code); } catch (e) { alert(e.message); }
+        });
+      });
+    } catch (e) { /* rooms not available */ }
+  }
+
+  _showMultiplayerLobby(data) {
+    const html = `
+      <div style="text-align:center;min-width:300px">
+        <h3 style="margin-bottom:12px">Waiting for opponent...</h3>
+        <div style="font-size:2.5rem;font-family:JetBrains Mono,monospace;letter-spacing:6px;color:var(--accent-cyan);margin:20px 0">${data.room_code}</div>
+        <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:16px">Share this code with a friend to play!</p>
+        <button class="btn secondary" id="mp-copy-link" style="margin-bottom:8px">📋 Copy Invite Link</button>
+        <button class="btn danger" id="mp-cancel" style="margin-top:6px">Cancel</button>
+        <div id="mp-chat-area" style="margin-top:16px"></div>
+      </div>
+    `;
+    this._showFeatureModal('multiplayer-modal', html);
+    document.getElementById('mp-copy-link').addEventListener('click', () => {
+      const link = this.multiplayer.getShareLink();
+      navigator.clipboard.writeText(link).catch(() => {});
+      document.getElementById('mp-copy-link').textContent = '✓ Copied!';
+    });
+    document.getElementById('mp-cancel').addEventListener('click', () => this.multiplayer.leaveRoom());
+  }
+
+  async _startMultiplayerGame(data) {
+    this._closeModal('multiplayer-modal');
+    this._multiplayerActive = true;
+    this.useAI = false;
+    if (data.fen) {
+      await this._loadPosition(data.fen, data.pieces, data.legal_moves);
+    }
+    this._updateStatus(`Multiplayer — ${this.multiplayer.myColor === 'white' ? '⬜' : '⬛'} You play ${this.multiplayer.myColor}`);
+    this._showMultiplayerChat();
+  }
+
+  _syncMultiplayerState(data) {
+    if (data.fen) {
+      this.fen = data.fen;
+      this.pieces = data.pieces || [];
+      this.legalMoves = data.legal_moves || [];
+      this.sideToMove = data.side_to_move || 'white';
+      this.isCheck = data.is_check || false;
+      this.moveHistory = data.move_history || [];
+      this.board.updatePieces(this.pieces);
+      this._updateUI();
+    }
+  }
+
+  _showMultiplayerChat() {
+    // Floating chat button
+    let chatBtn = document.getElementById('mp-chat-btn');
+    if (!chatBtn) {
+      chatBtn = document.createElement('button');
+      chatBtn.id = 'mp-chat-btn';
+      chatBtn.className = 'btn';
+      chatBtn.style.cssText = 'position:fixed;bottom:20px;right:20px;width:48px;height:48px;border-radius:50%;z-index:200;font-size:1.4rem;padding:0;display:flex;align-items:center;justify-content:center';
+      chatBtn.textContent = '💬';
+      chatBtn.addEventListener('click', () => this._toggleChatPanel());
+      document.body.appendChild(chatBtn);
+    }
+  }
+
+  _toggleChatPanel() {
+    let panel = document.getElementById('mp-chat-panel');
+    if (panel) { panel.remove(); return; }
+
+    panel = document.createElement('div');
+    panel.id = 'mp-chat-panel';
+    panel.style.cssText = 'position:fixed;bottom:80px;right:20px;width:280px;background:var(--bg-panel);border:1px solid var(--border-glow);border-radius:12px;z-index:200;display:flex;flex-direction:column;max-height:350px;backdrop-filter:blur(12px)';
+    panel.innerHTML = `
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border-glow);font-weight:600;font-size:0.85rem">Chat</div>
+      <div id="mp-chat-msgs" style="flex:1;overflow-y:auto;padding:8px;min-height:120px;max-height:200px"></div>
+      <div style="display:flex;gap:4px;padding:8px;flex-wrap:wrap;border-top:1px solid var(--border-glow)">
+        ${EMOTES.map(e => `<button class="mp-emote-btn" data-emote="${e.id}" title="${e.label}" style="cursor:pointer;font-size:1.2rem;background:none;border:none;padding:2px 4px">${e.emoji}</button>`).join('')}
+      </div>
+      <div style="display:flex;gap:4px;padding:0 8px 8px">
+        <input type="text" id="mp-chat-input" placeholder="Type..." style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border-glow);background:var(--bg-card);color:var(--text-primary);font-size:0.8rem" />
+        <button class="btn" id="mp-chat-send" style="padding:6px 12px;font-size:0.8rem">Send</button>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    panel.querySelectorAll('.mp-emote-btn').forEach(btn => {
+      btn.addEventListener('click', () => this.multiplayer.sendEmote(btn.dataset.emote));
+    });
+    document.getElementById('mp-chat-send').addEventListener('click', () => {
+      const input = document.getElementById('mp-chat-input');
+      if (input.value.trim()) { this.multiplayer.sendChat(input.value.trim()); input.value = ''; }
+    });
+    document.getElementById('mp-chat-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('mp-chat-send').click();
+    });
+  }
+
+  _addChatMessage(msg) {
+    const container = document.getElementById('mp-chat-msgs');
+    if (!container) return;
+    const isEmote = msg.content.type === 'emote';
+    const emote = isEmote ? EMOTES.find(e => e.id === msg.content.emote) : null;
+    const div = document.createElement('div');
+    div.style.cssText = 'margin-bottom:4px;font-size:0.8rem';
+    div.innerHTML = isEmote
+      ? `<span style="color:var(--accent-cyan)">${msg.sender_name}</span> ${emote?.emoji || msg.content.emote}`
+      : `<span style="color:var(--accent-cyan)">${msg.sender_name}:</span> ${msg.content.text}`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  _handleMultiplayerGameOver(data) {
+    this._multiplayerActive = false;
+    // Clean up chat button
+    const chatBtn = document.getElementById('mp-chat-btn');
+    if (chatBtn) chatBtn.remove();
+    const chatPanel = document.getElementById('mp-chat-panel');
+    if (chatPanel) chatPanel.remove();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  DAILY PUZZLE
+  // ══════════════════════════════════════════════════════════════
+
+  _initDailyPuzzle() {
+    const btn = document.getElementById('btn-daily-puzzle');
+    if (btn) btn.addEventListener('click', () => this._showDailyPuzzle());
+
+    // Auto-show notification if today's not solved
+    if (!isDailySolved()) {
+      setTimeout(() => {
+        const badge = document.getElementById('daily-badge');
+        if (badge) { badge.style.display = 'flex'; }
+      }, 2000);
+    }
+  }
+
+  _showDailyPuzzle() {
+    const puzzle = getDailyPuzzle();
+    const stats = getDailyStats();
+    const solved = isDailySolved();
+
+    const html = `
+      <div style="min-width:360px;max-width:420px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h3>📅 Daily Puzzle #${puzzle.puzzleNumber}</h3>
+          <div style="font-size:0.75rem;color:var(--text-muted)">${puzzle.date}</div>
+        </div>
+        <div style="background:var(--bg-card);border:1px solid var(--border-glow);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-weight:600;margin-bottom:4px">${puzzle.title}</div>
+          <div style="font-size:0.85rem;color:var(--text-secondary)">${puzzle.desc}</div>
+          <div style="margin-top:6px;font-size:0.75rem;color:var(--accent-gold)">Rating: ${puzzle.rating} · Theme: ${puzzle.theme}</div>
+        </div>
+        ${solved 
+          ? '<div style="text-align:center;font-size:1.5rem;margin:12px 0">✅ Solved!</div>'
+          : '<button class="btn" id="daily-play" style="width:100%">▶ Play</button>'
+        }
+        <div style="display:flex;gap:16px;margin-top:16px;justify-content:center">
+          <div style="text-align:center">
+            <div style="font-size:1.5rem;font-weight:700;color:var(--accent-cyan)">${stats.currentStreak}</div>
+            <div style="font-size:0.7rem;color:var(--text-muted)">STREAK</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:1.5rem;font-weight:700;color:var(--accent-gold)">${stats.bestStreak}</div>
+            <div style="font-size:0.7rem;color:var(--text-muted)">BEST</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary)">${stats.totalSolved}</div>
+            <div style="font-size:0.7rem;color:var(--text-muted)">TOTAL</div>
+          </div>
+        </div>
+      </div>
+    `;
+    this._showFeatureModal('daily-modal', html);
+
+    if (!solved) {
+      document.getElementById('daily-play').addEventListener('click', () => {
+        this._closeModal('daily-modal');
+        this._startDailyPuzzle(puzzle);
+      });
+    }
+  }
+
+  _startDailyPuzzle(puzzle) {
+    this._dailyPuzzleMode = true;
+    this._currentPuzzle = puzzle;
+    this._puzzleMoveIndex = 0;
+    this._puzzleMode = true;
+    this.newGame(puzzle.fen);
+    this._updateStatus(`📅 Daily Puzzle: ${puzzle.title}`);
+  }
+
+  _checkDailyPuzzleMove(uci) {
+    if (!this._dailyPuzzleMode || !this._currentPuzzle) return false;
+    const expected = this._currentPuzzle.solution[this._puzzleMoveIndex];
+    if (uci === expected) {
+      this._puzzleMoveIndex++;
+      if (this._puzzleMoveIndex >= this._currentPuzzle.solution.length) {
+        // Solved!
+        const stats = solveDailyPuzzle();
+        addXP('daily_puzzle');
+        sounds.playPuzzleCorrect?.() || sounds.playCapture?.();
+        this._dailyPuzzleMode = false;
+        this._puzzleMode = false;
+        this._updateStatus('✅ Daily Puzzle Solved! Streak: ' + stats.currentStreak);
+        const badge = document.getElementById('daily-badge');
+        if (badge) badge.style.display = 'none';
+        return true;
+      }
+      return true;
+    }
+    sounds.playIllegal?.();
+    return false;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  TIMED DRILLS
+  // ══════════════════════════════════════════════════════════════
+
+  _initTimedDrills() {
+    const btn = document.getElementById('btn-timed-drills');
+    if (btn) btn.addEventListener('click', () => this._showTimedDrillMenu());
+  }
+
+  _showTimedDrillMenu() {
+    const stats = getTimedDrillStats();
+    const html = `
+      <div style="min-width:360px">
+        <h3 style="margin-bottom:16px;text-align:center">⏱️ Timed Drills</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${TIMED_DRILL_CONFIGS.map(c => `
+            <div class="drill-option" data-drill="${c.id}" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-card);border:1px solid var(--border-glow);border-radius:8px;cursor:pointer;transition:border-color 0.2s">
+              <span style="font-size:1.5rem">${c.icon}</span>
+              <div style="flex:1">
+                <div style="font-weight:600">${c.name}</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary)">${c.puzzleCount === 999 ? 'Unlimited' : c.puzzleCount} puzzles · ${c.timeLimitSec}s</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:0.9rem;font-weight:700;color:var(--accent-gold)">${stats.bestScores[c.id] || 0}</div>
+                <div style="font-size:0.65rem;color:var(--text-muted)">BEST</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    this._showFeatureModal('drill-modal', html);
+    document.querySelectorAll('.drill-option').forEach(el => {
+      el.addEventListener('click', () => {
+        this._closeModal('drill-modal');
+        this._startTimedDrill(el.dataset.drill);
+      });
+      el.addEventListener('mouseenter', () => el.style.borderColor = 'var(--accent-primary)');
+      el.addEventListener('mouseleave', () => el.style.borderColor = 'var(--border-glow)');
+    });
+  }
+
+  _startTimedDrill(configId) {
+    this._timedDrillSession = new TimedDrillSession(configId);
+    this._puzzleMode = true;
+
+    this._timedDrillSession.onTick((remaining, solved) => {
+      this._updateStatus(`⏱️ ${Math.ceil(remaining)}s — Solved: ${solved}/${this._timedDrillSession.puzzles.length}`);
+    });
+
+    this._timedDrillSession.onComplete((result) => {
+      this._puzzleMode = false;
+      this._showDrillResult(result);
+    });
+
+    this._timedDrillSession.start();
+    const first = this._timedDrillSession.getCurrentPuzzle();
+    if (first) this.newGame(first.fen);
+  }
+
+  _handleTimedDrillMove(uci) {
+    if (!this._timedDrillSession || !this._timedDrillSession.active) return false;
+    const result = this._timedDrillSession.submitMove(uci);
+    if (result.correct) sounds.playPuzzleCorrect?.();
+    else sounds.playIllegal?.();
+
+    if (!result.finished && result.nextPuzzle) {
+      setTimeout(() => this.newGame(result.nextPuzzle.fen), 500);
+    }
+    return true;
+  }
+
+  _showDrillResult(result) {
+    addXP('puzzle_solved');
+    const html = `
+      <div style="text-align:center;min-width:300px">
+        <h3 style="margin-bottom:12px">⏱️ ${result.configName}</h3>
+        <div style="font-size:3rem;font-weight:700;color:var(--accent-gold);margin:16px 0">${result.score}</div>
+        <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px">points</div>
+        <div style="display:flex;gap:20px;justify-content:center;margin-bottom:16px">
+          <div><span style="font-size:1.2rem;font-weight:700;color:#96bc4b">${result.solved}</span><br/><span style="font-size:0.7rem;color:var(--text-muted)">Solved</span></div>
+          <div><span style="font-size:1.2rem;font-weight:700;color:#ca3431">${result.mistakes}</span><br/><span style="font-size:0.7rem;color:var(--text-muted)">Wrong</span></div>
+          <div><span style="font-size:1.2rem;font-weight:700;color:var(--text-primary)">${Math.floor(result.timeTaken)}s</span><br/><span style="font-size:0.7rem;color:var(--text-muted)">Time</span></div>
+        </div>
+        <button class="btn" onclick="document.getElementById('drill-result-modal')?.remove()">Close</button>
+      </div>
+    `;
+    this._showFeatureModal('drill-result-modal', html);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  POSITION EDITOR
+  // ══════════════════════════════════════════════════════════════
+
+  _initPositionEditor() {
+    const btn = document.getElementById('btn-position-editor');
+    if (btn) btn.addEventListener('click', () => this._showPositionEditor());
+  }
+
+  _showPositionEditor() {
+    this._positionEditor.setStartPosition();
+
+    const html = `
+      <div style="min-width:400px">
+        <h3 style="margin-bottom:12px;text-align:center">🔧 Position Editor</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:12px" id="editor-palette">
+          ${EDITOR_PIECES.map(p => `
+            <button class="editor-piece-btn" data-fen="${p.fen}" title="${p.color} ${p.name}"
+              style="font-size:1.6rem;width:40px;height:40px;border:2px solid var(--border-glow);border-radius:6px;background:var(--bg-card);cursor:pointer;display:flex;align-items:center;justify-content:center;color:${p.color === 'white' ? '#f0f0f0' : '#333'}">${p.symbol}</button>
+          `).join('')}
+          <button class="editor-piece-btn" data-fen="" title="Eraser"
+            style="font-size:1.2rem;width:40px;height:40px;border:2px solid var(--border-glow);border-radius:6px;background:var(--bg-card);cursor:pointer">🧹</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="btn secondary" id="editor-standard" style="flex:1;font-size:0.8rem">Standard</button>
+          <button class="btn secondary" id="editor-clear" style="flex:1;font-size:0.8rem">Clear</button>
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:0.75rem;color:var(--text-muted)">Side to move</label>
+          <select id="editor-stm" style="margin-top:2px">
+            <option value="white">White</option>
+            <option value="black">Black</option>
+          </select>
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:0.75rem;color:var(--text-muted)">Castling</label>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <label class="toggle-label"><input type="checkbox" id="ed-K" checked /> K</label>
+            <label class="toggle-label"><input type="checkbox" id="ed-Q" checked /> Q</label>
+            <label class="toggle-label"><input type="checkbox" id="ed-k" checked /> k</label>
+            <label class="toggle-label"><input type="checkbox" id="ed-q" checked /> q</label>
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:0.75rem;color:var(--text-muted)">FEN</label>
+          <input type="text" id="editor-fen" style="width:100%;padding:6px;font-family:JetBrains Mono;font-size:0.75rem;border-radius:6px;border:1px solid var(--border-glow);background:var(--bg-card);color:var(--text-primary);margin-top:2px" />
+        </div>
+        <div id="editor-errors" style="color:var(--accent-secondary);font-size:0.8rem;margin-bottom:8px"></div>
+        <div class="btn-row">
+          <button class="btn" id="editor-play">▶ Play from Position</button>
+          <button class="btn secondary" id="editor-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+    this._showFeatureModal('editor-modal', html);
+
+    const fenInput = document.getElementById('editor-fen');
+    fenInput.value = this._positionEditor.toFEN();
+
+    this._positionEditor.on('change', (fen) => {
+      fenInput.value = fen;
+      const v = this._positionEditor.validate();
+      document.getElementById('editor-errors').textContent = v.valid ? '' : v.errors.join('; ');
+    });
+
+    document.querySelectorAll('.editor-piece-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.editor-piece-btn').forEach(b => b.style.borderColor = 'var(--border-glow)');
+        btn.style.borderColor = 'var(--accent-primary)';
+        this._positionEditor.selectPiece(btn.dataset.fen || null);
+      });
+    });
+
+    document.getElementById('editor-standard').addEventListener('click', () => {
+      this._positionEditor.setStartPosition();
+    });
+    document.getElementById('editor-clear').addEventListener('click', () => {
+      this._positionEditor.clear();
+    });
+    document.getElementById('editor-stm').addEventListener('change', (e) => {
+      this._positionEditor.setSideToMove(e.target.value);
+    });
+    ['K','Q','k','q'].forEach(c => {
+      document.getElementById(`ed-${c}`).addEventListener('change', (e) => {
+        this._positionEditor.setCastling({ [c]: e.target.checked });
+      });
+    });
+    fenInput.addEventListener('change', () => {
+      this._positionEditor.loadFEN(fenInput.value);
+    });
+    document.getElementById('editor-play').addEventListener('click', () => {
+      const v = this._positionEditor.validate();
+      if (!v.valid) { alert(v.errors.join('\n')); return; }
+      const fen = this._positionEditor.toFEN();
+      this._closeModal('editor-modal');
+      this.newGame(fen);
+    });
+    document.getElementById('editor-cancel').addEventListener('click', () => {
+      this._closeModal('editor-modal');
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  BLINDFOLD MODE
+  // ══════════════════════════════════════════════════════════════
+
+  _initBlindfoldMode() {
+    const btn = document.getElementById('btn-blindfold');
+    if (btn) btn.addEventListener('click', () => this._toggleBlindfold());
+  }
+
+  _toggleBlindfold() {
+    this._blindfoldMode = !this._blindfoldMode;
+    this.board.setBlindfold?.(this._blindfoldMode);
+    const btn = document.getElementById('btn-blindfold');
+    if (btn) {
+      btn.textContent = this._blindfoldMode ? '👁️ Show Pieces' : '🙈 Blindfold';
+      btn.classList.toggle('active', this._blindfoldMode);
+    }
+    this._updateStatus(this._blindfoldMode ? '🙈 Blindfold Mode — pieces hidden!' : 'Pieces visible');
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  VARIANT SELECTOR
+  // ══════════════════════════════════════════════════════════════
+
+  _initVariantSelector() {
+    const sel = document.getElementById('variant-select');
+    if (sel) {
+      sel.addEventListener('change', (e) => {
+        this._gameVariant = e.target.value;
+        if (this._gameVariant === 'chess960') {
+          this._chess960Id = null; // random
+        }
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  COSMETICS / UNLOCKABLES
+  // ══════════════════════════════════════════════════════════════
+
+  _initCosmeticsPanel() {
+    const btn = document.getElementById('btn-cosmetics');
+    if (btn) btn.addEventListener('click', () => this._showCosmeticsPanel());
+  }
+
+  _showCosmeticsPanel() {
+    const state = getCosmeticsState();
+    const xp = getXPState();
+
+    const html = `
+      <div style="min-width:400px;max-height:80vh;overflow-y:auto">
+        <h3 style="margin-bottom:8px;text-align:center">✨ Cosmetics & Rewards</h3>
+        
+        <!-- XP Bar -->
+        <div style="margin-bottom:16px;padding:12px;background:var(--bg-card);border-radius:8px;border:1px solid var(--border-glow)">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:0.8rem;font-weight:600">Level ${xp.level}</span>
+            <span style="font-size:0.75rem;color:var(--text-secondary)">${xp.xpInLevel}/${xp.xpToNextLevel} XP</span>
+          </div>
+          <div style="height:6px;background:var(--bg-primary);border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${xp.progress * 100}%;background:linear-gradient(90deg,var(--accent-primary),var(--accent-cyan));border-radius:3px;transition:width 0.3s"></div>
+          </div>
+        </div>
+
+        <!-- Piece Sets -->
+        <h4 style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">PIECE SETS</h4>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:16px">
+          ${Object.entries(PIECE_SETS).map(([id, set]) => {
+            const unlocked = state.unlockedPieceSets.includes(id);
+            const active = state.activePieceSet === id;
+            return `
+              <div class="cosmetic-item ${unlocked ? 'unlocked' : 'locked'} ${active ? 'active' : ''}" data-type="pieceset" data-id="${id}"
+                style="padding:8px;border:1px solid ${active ? 'var(--accent-primary)' : 'var(--border-glow)'};border-radius:8px;cursor:${unlocked ? 'pointer' : 'default'};opacity:${unlocked ? 1 : 0.5};background:${active ? 'rgba(108,92,231,0.1)' : 'var(--bg-card)'}">
+                <div style="font-size:1.2rem">${set.icon} ${set.name}</div>
+                <div style="font-size:0.7rem;color:var(--text-secondary)">${unlocked ? set.description : '🔒 ' + this._describeCondition(set.unlockCondition)}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+
+        <!-- Titles -->
+        <h4 style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">TITLES</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">
+          ${Object.entries(TITLES).map(([id, title]) => {
+            const unlocked = state.unlockedTitles.includes(id);
+            const active = state.activeTitle === id;
+            return `
+              <div class="cosmetic-item ${active ? 'active' : ''}" data-type="title" data-id="${id}"
+                style="padding:6px 12px;border:1px solid ${active ? 'var(--accent-gold)' : 'var(--border-glow)'};border-radius:20px;cursor:${unlocked ? 'pointer' : 'default'};opacity:${unlocked ? 1 : 0.5};font-size:0.8rem;background:${active ? 'rgba(201,168,76,0.1)' : 'var(--bg-card)'}">
+                ${title.icon} ${title.name}
+              </div>
+            `;
+          }).join('')}
+        </div>
+
+        <!-- Backgrounds -->
+        <h4 style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">BACKGROUNDS</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">
+          ${Object.entries(BOARD_BACKGROUNDS).map(([id, bg]) => {
+            const unlocked = state.unlockedBackgrounds.includes(id);
+            const active = state.activeBackground === id;
+            return `
+              <div class="cosmetic-item" data-type="background" data-id="${id}"
+                style="padding:6px 12px;border:1px solid ${active ? 'var(--accent-cyan)' : 'var(--border-glow)'};border-radius:8px;cursor:${unlocked ? 'pointer' : 'default'};opacity:${unlocked ? 1 : 0.5};font-size:0.8rem">
+                <span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${bg.preview};vertical-align:middle;margin-right:6px"></span>
+                ${bg.name}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+    this._showFeatureModal('cosmetics-modal', html);
+
+    document.querySelectorAll('.cosmetic-item.unlocked, .cosmetic-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const type = el.dataset.type;
+        const id = el.dataset.id;
+        if (type === 'pieceset') setActivePieceSet(id);
+        else if (type === 'title') setActiveTitle(id);
+        else if (type === 'background') setActiveBackground(id);
+        this._showCosmeticsPanel(); // refresh
+      });
+    });
+  }
+
+  _describeCondition(cond) {
+    if (!cond) return 'Available';
+    switch (cond.type) {
+      case 'games': return `Play ${cond.count} games`;
+      case 'rating': return `Reach ${cond.value} rating`;
+      case 'streak': return `${cond.count}-game win streak`;
+      case 'puzzles': return `Solve ${cond.count} puzzles`;
+      case 'achievement': return `Unlock achievement "${cond.id}"`;
+      default: return 'Unknown';
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  LEADERBOARD
+  // ══════════════════════════════════════════════════════════════
+
+  _initLeaderboard() {
+    const btn = document.getElementById('btn-leaderboard');
+    if (btn) btn.addEventListener('click', () => this._showLeaderboard());
+  }
+
+  async _showLeaderboard() {
+    let entries = [];
+    try { entries = await this.multiplayer.getLeaderboard(); } catch (e) { /* offline */ }
+    
+    const html = `
+      <div style="min-width:380px">
+        <h3 style="margin-bottom:16px;text-align:center">🏆 Leaderboard</h3>
+        ${entries.length === 0
+          ? '<div style="text-align:center;color:var(--text-muted);padding:20px">No entries yet. Play multiplayer games to appear!</div>'
+          : `<div style="max-height:400px;overflow-y:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+                <thead>
+                  <tr style="color:var(--text-muted);border-bottom:1px solid var(--border-glow)">
+                    <th style="padding:6px;text-align:left">#</th>
+                    <th style="padding:6px;text-align:left">Player</th>
+                    <th style="padding:6px;text-align:right">Rating</th>
+                    <th style="padding:6px;text-align:right">W/L/D</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${entries.slice(0, 50).map((e, i) => `
+                    <tr style="border-bottom:1px solid rgba(100,120,255,0.05)">
+                      <td style="padding:6px;color:${i < 3 ? 'var(--accent-gold)' : 'var(--text-muted)'}">${i + 1}</td>
+                      <td style="padding:6px;font-weight:${i < 3 ? 600 : 400}">${e.player_name}</td>
+                      <td style="padding:6px;text-align:right;color:var(--accent-cyan)">${e.rating}</td>
+                      <td style="padding:6px;text-align:right;font-size:0.75rem;color:var(--text-secondary)">${e.wins}/${e.losses}/${e.draws}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>`
+        }
+      </div>
+    `;
+    this._showFeatureModal('leaderboard-modal', html);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  URL PARAMS (challenge links)
+  // ══════════════════════════════════════════════════════════════
+
+  _checkUrlParams() {
+    const params = new URLSearchParams(window.location.search);
+    const joinCode = params.get('join');
+    if (joinCode && joinCode.length === 6) {
+      setTimeout(async () => {
+        try {
+          await this.multiplayer.joinRoom(joinCode);
+        } catch (e) {
+          console.warn('Auto-join failed:', e);
+        }
+        // Clean URL
+        history.replaceState(null, '', window.location.pathname);
+      }, 1000);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  UTILITY (shared modal helpers)
+  // ══════════════════════════════════════════════════════════════
+
+  _showFeatureModal(id, html) {
+    // Remove existing modal with same ID
+    const existing = document.getElementById(id);
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = id;
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:1000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)';
+    modal.innerHTML = `
+      <div style="background:var(--bg-panel);border:1px solid var(--border-glow);border-radius:16px;padding:24px;max-width:90vw;max-height:90vh;overflow-y:auto;position:relative;animation:overlay-in 0.2s ease-out">
+        <button class="modal-close-btn" style="position:absolute;top:10px;right:10px;background:none;border:none;color:var(--text-muted);font-size:1.2rem;cursor:pointer;padding:4px 8px">✕</button>
+        ${html}
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    // Close on backdrop click
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.remove();
+    });
+    modal.querySelector('.modal-close-btn').addEventListener('click', () => modal.remove());
+  }
+
+  _closeModal(id) {
+    const modal = document.getElementById(id);
+    if (modal) modal.remove();
+  }
+
+  _loadPosition(fen, pieces, legalMoves) {
+    this.fen = fen;
+    this.pieces = pieces || [];
+    this.legalMoves = legalMoves || [];
+    this.board.updatePieces(this.pieces);
+    this._updateUI();
   }
 }
 

@@ -1178,6 +1178,7 @@ export class ChessBoard3D {
 
       mesh.userData = { square: sq, pieceType: typeLetter, isWhite };
       mesh.position.set(worldPos.x, 0.04, worldPos.z);
+      if (this._blindfoldMode) mesh.visible = false;
       this.scene.add(mesh);
       this.pieceMeshes.set(sq, mesh);
     }
@@ -1905,5 +1906,14 @@ export class ChessBoard3D {
     this._resizeObserver.disconnect();
     this.composer.dispose();
     this.renderer.dispose();
+  }
+
+  // ── Blindfold mode ──
+
+  setBlindfold(enabled) {
+    this._blindfoldMode = !!enabled;
+    this.pieceMeshes.forEach((mesh) => {
+      mesh.visible = !this._blindfoldMode;
+    });
   }
 }

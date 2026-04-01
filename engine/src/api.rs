@@ -9,6 +9,8 @@ use crate::evaluation::{evaluate, search_best_move, search_top_moves};
 use crate::game::GameState;
 use crate::moves::generate_legal_moves;
 use crate::persistence;
+use crate::chess960;
+use crate::variants;
 
 pub struct AppState {
     pub games: Mutex<HashMap<String, GameState>>,
@@ -421,6 +423,81 @@ pub async fn attack_map(body: web::Json<EvalRequest>) -> impl Responder {
     HttpResponse::Ok().json(attacks::compute_attack_map(&board, body.fen.clone()))
 }
 
+/// Get a Chess960 random starting position
+pub async fn chess960_random() -> impl Responder {
+    let pos = chess960::random_position();
+    HttpResponse::Ok().json(pos)
+}
+
+/// Get a specific Chess960 position by ID (0-959)
+pub async fn chess960_position(path: web::Path<u16>) -> impl Responder {
+    let id = path.into_inner();
+    if id >= 960 {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "Position ID must be 0-959".to_string(),
+        });
+    }
+    let pos = chess960::generate_position(id);
+    HttpResponse::Ok().json(pos)
+}
+
+/// List all available game variants
+pub async fn list_variants() -> impl Responder {
+    HttpResponse::Ok().json(variants::list_variants())
+}
+
+/// Create a new game with a specific variant
+#[derive(Deserialize)]
+pub struct NewVariantGameRequest {
+    pub variant: String,
+    pub chess960_id: Option<u16>,
+    pub fen: Option<String>,
+}
+
+pub async fn new_variant_game(
+    data: web::Data<AppState>,
+    body: web::Json<NewVariantGameRequest>,
+) -> impl Responder {
+    let variant = variants::GameVariant::from_str(&body.variant)
+        .unwrap_or(variants::GameVariant::Standard);
+
+    let game = match variant {
+        variants::GameVariant::Chess960 => {
+            let pos = if let Some(id) = body.chess960_id {
+                chess960::generate_position(id)
+            } else {
+                chess960::random_position()
+            };
+            match GameState::from_fen(&pos.fen) {
+                Ok(g) => g,
+                Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
+            }
+        }
+        _ => {
+            if let Some(ref fen) = body.fen {
+                match GameState::from_fen(fen) {
+                    Ok(g) => g,
+                    Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
+                }
+            } else {
+                GameState::new()
+            }
+        }
+    };
+
+    let response = NewGameResponse {
+        game_id: game.id.clone(),
+        fen: game.board.to_fen(),
+        pieces: game.board.to_piece_list(),
+        legal_moves: game.get_legal_moves(),
+    };
+
+    let game_id = game.id.clone();
+    data.games.lock().unwrap().insert(game_id, game);
+
+    HttpResponse::Ok().json(response)
+}
+
 /// Configure API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg
@@ -433,5 +510,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/game/{id}/engine-move", web::post().to(engine_move))
         .route("/evaluate", web::post().to(evaluate_position))
         .route("/analyze", web::post().to(analyze_position))
-        .route("/attack-map", web::post().to(attack_map));
+        .route("/attack-map", web::post().to(attack_map))
+        .route("/chess960/random", web::get().to(chess960_random))
+        .route("/chess960/{id}", web::get().to(chess960_position))
+        .route("/variants", web::get().to(list_variants))
+        .route("/game/new-variant", web::post().to(new_variant_game));
 }
