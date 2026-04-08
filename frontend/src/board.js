@@ -214,12 +214,20 @@ export class ChessBoard3D {
     const z = Math.cos(this.cameraOrbitAngle) * Math.cos(this.cameraOrbitPitch) * this.cameraOrbitDist;
     this.camera.position.set(x, y, z);
     this.camera.lookAt(this.cameraTarget.x, this.cameraTarget.y, this.cameraTarget.z);
+    this.camera.updateMatrixWorld(true);
   }
 
   _setupCameraOrbit() {
     let dragging = false;
     let lastX = 0, lastY = 0;
     let dragButton = -1;
+    let dragMoved = false;
+    let capturedPointerId = null;
+
+    // Public flag: true while orbit drag is active, so other systems can check
+    this.isOrbiting = false;
+    // Flag: set to true after an orbit drag ends, cleared on next click
+    this._orbitJustEnded = false;
 
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -229,10 +237,13 @@ export class ChessBoard3D {
       const leftOrbit = e.button === 0 && (e.shiftKey || e.altKey || this._freeRotateMode);
       if (e.button === 2 || e.button === 1 || leftOrbit) {
         dragging = true;
+        dragMoved = false;
         dragButton = e.button;
         lastX = e.clientX;
         lastY = e.clientY;
-        this.canvas.setPointerCapture(e.pointerId);
+        capturedPointerId = e.pointerId;
+        this.isOrbiting = true;
+        try { this.canvas.setPointerCapture(e.pointerId); } catch (_) {}
       }
     });
 
@@ -240,6 +251,7 @@ export class ChessBoard3D {
       if (!dragging) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) dragMoved = true;
       this.cameraOrbitAngle -= dx * 0.005;
       this.cameraOrbitPitch = Math.max(0.05, Math.min(1.55, this.cameraOrbitPitch + dy * 0.005));
       lastX = e.clientX;
@@ -248,9 +260,30 @@ export class ChessBoard3D {
     });
 
     this.canvas.addEventListener('pointerup', (e) => {
+      if (!dragging) return;
       if (e.button === dragButton || e.button === 2 || e.button === 1) {
         dragging = false;
+        this.isOrbiting = false;
+        if (dragMoved) {
+          this._orbitJustEnded = true;
+          // Reset flag after a short delay so the next click isn't suppressed
+          setTimeout(() => { this._orbitJustEnded = false; }, 100);
+        }
         dragButton = -1;
+        if (capturedPointerId !== null) {
+          try { this.canvas.releasePointerCapture(capturedPointerId); } catch (_) {}
+          capturedPointerId = null;
+        }
+      }
+    });
+
+    // Also handle lostpointercapture to clean up
+    this.canvas.addEventListener('lostpointercapture', () => {
+      if (dragging) {
+        dragging = false;
+        this.isOrbiting = false;
+        dragButton = -1;
+        capturedPointerId = null;
       }
     });
 

@@ -989,6 +989,9 @@ class ChessGame {
     // Don't handle left-click if it's during orbit (right-click drag)
     if (e.button !== 0) return;
 
+    // Skip if user just finished an orbit rotation (prevents misclicks after rotating)
+    if (this.board.isOrbiting || this.board._orbitJustEnded) return;
+
     const sq = this.board.getSquareAtScreen(e.clientX, e.clientY);
     if (!sq) return;
 
@@ -3243,6 +3246,8 @@ class ChessGame {
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.shiftKey || e.altKey) return;
       if (this.thinking || this.status !== 'Active') return;
+      // Don't start drag if board is orbiting or free-rotate is on
+      if (this.board.isOrbiting || this.board._freeRotateMode) return;
 
       const sq = this.board.getSquareAtScreen(e.clientX, e.clientY);
       if (!sq) return;
