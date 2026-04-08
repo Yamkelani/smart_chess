@@ -20,6 +20,7 @@ import { getDailyPuzzle, isDailySolved, solveDailyPuzzle, getDailyStats } from '
 import { PositionEditor, EDITOR_PIECES } from './editor.js';
 import { TimedDrillSession, TIMED_DRILL_CONFIGS, getTimedDrillStats, getBestScore } from './timed-drills.js';
 import { refreshUnlocks, addXP, getXPState, getCosmeticsState, PIECE_SETS, TITLES, BOARD_BACKGROUNDS, getActivePieceSet, setActivePieceSet, getActiveTitle, setActiveTitle, getActiveBackground, setActiveBackground, getUnlockedPieceSets, getUnlockedBoards, getUnlockedTitles, getUnlockedBackgrounds } from './cosmetics.js';
+import { MonitoringDashboard } from './monitoring.js';
 
 // Piece symbols for captured display (lowercase keys to match engine API)
 const PIECE_UNICODE = {
@@ -156,6 +157,7 @@ class ChessGame {
     this._initVariantSelector();
     this._initCosmeticsPanel();
     this._initLeaderboard();
+    this._initMonitoring();
     this._checkUrlParams();
     this.newGame();
 
@@ -4547,6 +4549,33 @@ class ChessGame {
       </div>
     `;
     this._showFeatureModal('leaderboard-modal', html);
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  //  AI MODEL MONITORING
+  // ══════════════════════════════════════════════════════════════
+
+  _initMonitoring() {
+    this._monitorDashboard = null;
+    const btn = document.getElementById('btn-monitoring');
+    if (btn) btn.addEventListener('click', () => this._showMonitoring());
+  }
+
+  _showMonitoring() {
+    // Create modal with a container div for the dashboard
+    const html = `
+      <div id="monitoring-container" style="min-width:500px;max-width:880px;width:85vw"></div>
+    `;
+    this._showFeatureModal('monitoring-modal', html);
+
+    // Initialize the dashboard inside the container
+    const container = document.getElementById('monitoring-container');
+    if (container) {
+      // Clean up previous dashboard if any
+      if (this._monitorDashboard) this._monitorDashboard.destroy();
+      this._monitorDashboard = new MonitoringDashboard(container);
+      this._monitorDashboard.init();
+    }
   }
 
   // ══════════════════════════════════════════════════════════════

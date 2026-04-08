@@ -36,6 +36,7 @@ from app.config import (
 from app.chess_env import board_to_tensor, move_to_index, MOVES_PER_SQUARE
 from app.self_play import TrainingExample, ReplayBuffer
 from app.model import ChessNetManager
+from app.monitoring import ModelMonitor
 
 
 @dataclass
@@ -66,10 +67,11 @@ class OnlineLearner:
     that grows over time, giving the AI genuine learning capability.
     """
 
-    def __init__(self, manager: ChessNetManager):
+    def __init__(self, manager: ChessNetManager, monitor: Optional[ModelMonitor] = None):
         self.manager = manager
         self.model = manager.get_model()
         self.device = manager.device
+        self.monitor = monitor
 
         # Active game sessions
         self.sessions: Dict[str, GameSession] = {}
@@ -219,6 +221,16 @@ class OnlineLearner:
         self.games_learned += 1
         self.total_positions_learned += num_positions
 
+        # Record game outcome in monitoring
+        if self.monitor:
+            self.monitor.record_game_outcome(
+                game_id=game_id,
+                result=result,
+                player_color=session.player_color,
+                num_moves=num_positions,
+                generation=self.manager.generation,
+            )
+
         return {
             "learned": True,
             "positions_added": num_positions,
@@ -305,6 +317,17 @@ class OnlineLearner:
             avg_policy = total_policy_loss / max(num_batches, 1)
             avg_value = total_value_loss / max(num_batches, 1)
             self.last_loss = {"policy": avg_policy, "value": avg_value}
+
+            # Record to monitoring system
+            if self.monitor:
+                self.monitor.record_training_loss(
+                    generation=self.manager.generation,
+                    policy_loss=avg_policy,
+                    value_loss=avg_value,
+                    source="online",
+                    batch_size=batch_size,
+                    epochs=ONLINE_LEARNING_EPOCHS,
+                )
 
             print(f"[OnlineLearner] quick train: {ONLINE_LEARNING_EPOCHS} epochs, "
                   f"batch={batch_size}, policy_loss={avg_policy:.4f}, "
@@ -413,6 +436,24 @@ class OnlineLearner:
         loss_info = self._quick_train()
         self.games_learned += 1
         self.total_positions_learned += num_positions
+
+        # Record game outcome in monitoring
+        if self.monitor:
+            self.monitor.record_game_with_winner(
+                game_id=game_id,
+                result=result,
+                winner=winner,
+                player_color=session.player_color,
+                num_moves=num_positions,
+                generation=self.manager.generation,
+            )
+            # Periodically check for drift (every 10 games)
+            if self.games_learned % 10 == 0:
+                self.monitor.check_drift(self.manager.generation)
+            # Periodically evaluate model (every 25 games)
+            if self.games_learned % 25 == 0:
+                self.monitor.evaluate_model(
+                    self.model, self.device, self.manager.generation)
 
         return {
             "learned": True,

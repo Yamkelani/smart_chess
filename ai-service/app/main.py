@@ -95,25 +95,36 @@ class HealthResponse(BaseModel):
 manager: Optional[ChessNetManager] = None
 http_client: Optional[httpx.AsyncClient] = None
 online_learner = None  # OnlineLearner instance
+model_monitor = None   # ModelMonitor instance
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
-    global manager, http_client, online_learner
+    global manager, http_client, online_learner, model_monitor
     print("Starting 3D Chess AI Service...")
 
     manager = ChessNetManager()
     http_client = httpx.AsyncClient(base_url=ENGINE_URL, timeout=30.0)
 
-    # Initialize online learning system
+    # Initialize monitoring system
+    from app.monitoring import ModelMonitor
+    model_monitor = ModelMonitor()
+
+    # Initialize online learning system (with monitor)
     from app.online_learner import OnlineLearner
-    online_learner = OnlineLearner(manager)
+    online_learner = OnlineLearner(manager, monitor=model_monitor)
+
+    # Run initial model evaluation against benchmarks
+    model_monitor.evaluate_model(
+        manager.get_model(), manager.device, manager.generation)
 
     print(f"Model generation: {manager.generation}")
     print(f"Device: {manager.device}")
     print(f"Engine URL: {ENGINE_URL}")
     print(f"Online learning: ACTIVE (buffer: {len(online_learner.replay_buffer)} positions)")
+    print(f"Monitoring: ACTIVE (ELO: {model_monitor.elo_rating:.0f}, "
+          f"games tracked: {model_monitor.total_games})")
 
     yield
 
@@ -469,6 +480,66 @@ async def learning_status():
     if not online_learner:
         return {"status": "disabled"}
     return online_learner.get_status()
+
+
+# ═══════════════════════════════════════════════════
+# AI MODEL MONITORING ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+@app.get("/ai/monitoring/dashboard")
+async def monitoring_dashboard():
+    """
+    Comprehensive monitoring dashboard — training quality, win rates,
+    drift detection, ELO tracking, and active alerts.
+    """
+    if not model_monitor or not manager:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return model_monitor.get_dashboard(manager.generation)
+
+
+@app.get("/ai/monitoring/loss-history")
+async def monitoring_loss_history(limit: int = 100):
+    """Return training loss history over time (policy + value)."""
+    if not model_monitor:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return {"loss_history": model_monitor.get_loss_history(limit)}
+
+
+@app.get("/ai/monitoring/win-rate")
+async def monitoring_win_rate(window: int = 10):
+    """Return rolling win-rate trend for AI games."""
+    if not model_monitor:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return {"win_rate_trend": model_monitor.get_win_rate_trend(window)}
+
+
+@app.get("/ai/monitoring/drift")
+async def monitoring_drift():
+    """Run drift detection and return the report."""
+    if not model_monitor or not manager:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return model_monitor.check_drift(manager.generation)
+
+
+@app.get("/ai/monitoring/evaluate")
+async def monitoring_evaluate():
+    """
+    Evaluate the current model against benchmark positions.
+    Returns accuracy (% best moves found) and value prediction quality.
+    """
+    if not model_monitor or not manager:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return model_monitor.evaluate_model(
+        manager.get_model(), manager.device, manager.generation)
+
+
+@app.post("/ai/monitoring/acknowledge-alert")
+async def monitoring_acknowledge_alert(index: int):
+    """Acknowledge (dismiss) a monitoring alert."""
+    if not model_monitor:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    model_monitor.acknowledge_alert(index)
+    return {"acknowledged": True}
 
 
 @app.get("/ai/difficulties")
