@@ -1253,8 +1253,10 @@ class ChessGame {
       if (aiResult && aiResult.move) {
         moveUci = aiResult.move;
       } else {
-        // Fallback to engine alpha-beta
-        const engineResult = await this.api.engineMove(this.gameId);
+        // Fallback to engine alpha-beta — map difficulty to search depth
+        const depthMap = { beginner: 1, intermediate: 3, advanced: 5, expert: 7, master: 9 };
+        const depth = depthMap[difficulty] || 4;
+        const engineResult = await this.api.engineMove(this.gameId, depth);
         if (engineResult && engineResult.success) {
           // Engine already made the move — refresh state
           const gameData = await this.api.getGame(this.gameId);

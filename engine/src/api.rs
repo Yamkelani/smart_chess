@@ -81,6 +81,11 @@ pub struct AnalyzeRequest {
     pub num_moves: Option<usize>,
 }
 
+#[derive(Deserialize)]
+pub struct EngineMoveQuery {
+    pub depth: Option<u8>,
+}
+
 #[derive(Serialize)]
 pub struct AnalyzedMove {
     pub uci: String,
@@ -316,13 +321,14 @@ pub async fn evaluate_position(body: web::Json<EvalRequest>) -> impl Responder {
 pub async fn engine_move(
     data: web::Data<AppState>,
     path: web::Path<String>,
+    query: web::Query<EngineMoveQuery>,
 ) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = data.games.lock().unwrap();
 
     match games.get_mut(&game_id) {
         Some(game) => {
-            let depth = 4;
+            let depth = query.depth.unwrap_or(4).min(12);
             match search_best_move(&game.board, depth) {
                 Some((best_move, score)) => {
                     let uci = best_move.to_uci();

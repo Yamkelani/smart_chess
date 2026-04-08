@@ -23,7 +23,8 @@ from typing import Optional, List, Dict
 
 from app.config import (
     AI_SERVICE_HOST, AI_SERVICE_PORT, ENGINE_URL,
-    DIFFICULTY_LEVELS, MCTS_SIMULATIONS, MCTS_TEMPERATURE, MAX_MCTS_SIMULATIONS
+    DIFFICULTY_LEVELS, DIFFICULTY_PROFILES, MCTS_SIMULATIONS, MCTS_TEMPERATURE,
+    MAX_MCTS_SIMULATIONS
 )
 from app.model import ChessNetManager
 from app.mcts import MCTS
@@ -152,10 +153,15 @@ app.add_middleware(
 
 # ---- Helper Functions ----
 
+def get_difficulty_profile(difficulty: str) -> dict:
+    """Return the full difficulty profile dict for a named level."""
+    return DIFFICULTY_PROFILES.get(difficulty, DIFFICULTY_PROFILES["intermediate"])
+
+
 def get_simulations(difficulty: str, requested: int | None = None) -> int:
     """Get MCTS simulation count for a difficulty level, capped at MAX_MCTS_SIMULATIONS."""
-    base = DIFFICULTY_LEVELS.get(difficulty, DIFFICULTY_LEVELS["intermediate"])
-    count = requested if requested is not None else base
+    profile = get_difficulty_profile(difficulty)
+    count = requested if requested is not None else profile["simulations"]
     return min(count, MAX_MCTS_SIMULATIONS)
 
 
@@ -217,6 +223,65 @@ def run_mcts(fen: str, num_simulations: int,
     }
 
 
+def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str) -> dict:
+    """
+    Post-process an MCTS result to simulate human-like play at lower difficulty.
+
+    At lower levels the AI will:
+    1. Blunder — randomly pick from the top-N moves instead of the best.
+    2. Miss tactics — occasionally ignore captures / checks.
+    3. Use higher temperature (already handled during MCTS), so this focuses
+       on the *additional* blunder / miss-tactics logic.
+    """
+    import random
+    profile = get_difficulty_profile(difficulty)
+
+    blunder_chance = profile["blunder_chance"]
+    blunder_top_n = profile["blunder_top_n"]
+    miss_tactics = profile["miss_tactics"]
+
+    # Nothing to do at expert / master
+    if blunder_chance <= 0 and miss_tactics <= 0:
+        return mcts_result
+
+    board = chess.Board(fen)
+    top_moves = mcts_result.get("top_moves", [])
+    if len(top_moves) < 2:
+        return mcts_result  # only one legal move — no choice
+
+    # ── Miss-tactics filter ──────────────────────────────────────────
+    # With probability `miss_tactics`, remove tactical moves (captures /
+    # checks) from the candidate pool so the AI "overlooks" them.
+    candidates = list(top_moves)
+    if miss_tactics > 0 and random.random() < miss_tactics:
+        non_tactical = []
+        for m in candidates:
+            try:
+                move_obj = chess.Move.from_uci(m["move"])
+                is_capture = board.is_capture(move_obj)
+                board.push(move_obj)
+                gives_check = board.is_check()
+                board.pop()
+                if not is_capture and not gives_check:
+                    non_tactical.append(m)
+            except Exception:
+                non_tactical.append(m)
+        # Only filter if we still have at least one candidate left
+        if non_tactical:
+            candidates = non_tactical
+
+    # ── Blunder roll ─────────────────────────────────────────────────
+    if blunder_chance > 0 and random.random() < blunder_chance:
+        pool = candidates[:blunder_top_n]
+        chosen = random.choice(pool)
+    else:
+        chosen = candidates[0]  # best available
+
+    # Overwrite the selected move in the result dict
+    mcts_result["move"] = chosen["move"]
+    return mcts_result
+
+
 # ---- Engine Communication ----
 
 async def engine_new_game(fen: Optional[str] = None) -> dict:
@@ -255,11 +320,24 @@ async def health_check():
 async def ai_move(req: AIMoveRequest):
     """Get an AI move for a given position."""
     try:
+        profile = get_difficulty_profile(req.difficulty)
         sims = get_simulations(req.difficulty)
-        # Apply personality temperature override
+        # Temperature: use request override > personality override > difficulty profile default
         personality = AI_PERSONALITIES.get(req.personality or "default", AI_PERSONALITIES["default"])
-        temp = req.temperature if req.temperature is not None else personality["temperature"]
+        if req.temperature is not None:
+            temp = req.temperature
+        elif personality["temperature"] is not None:
+            temp = personality["temperature"]
+        else:
+            temp = profile["temperature"]
+        # At lower difficulties, use the higher of personality temp and profile temp
+        # so the AI always feels appropriately imprecise
+        if req.difficulty in ("beginner", "intermediate"):
+            temp = max(temp, profile["temperature"])
         result = run_mcts(req.fen, num_simulations=sims, temperature=temp)
+
+        # Apply difficulty-based blunder / miss-tactics filtering
+        result = apply_difficulty_filter(result, req.difficulty, req.fen)
 
         # Record position for online learning
         if online_learner and req.game_id:

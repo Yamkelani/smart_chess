@@ -58,3 +58,53 @@ DIFFICULTY_LEVELS = {
     "expert": 1600,
     "master": 3200,
 }
+
+# Rich difficulty profiles — controls AI behaviour beyond just simulation count.
+# - simulations : MCTS iterations (more = stronger)
+# - temperature : move randomness (higher = more random)
+# - blunder_chance : probability of picking a suboptimal move (0.0–1.0)
+# - blunder_top_n : when blundering, pick randomly from top-N moves
+# - miss_tactics : probability of ignoring tactical moves (captures/checks)
+# - engine_depth : alpha-beta search depth for the Rust engine fallback
+DIFFICULTY_PROFILES = {
+    "beginner": {
+        "simulations": 50,
+        "temperature": 1.8,
+        "blunder_chance": 0.35,
+        "blunder_top_n": 8,
+        "miss_tactics": 0.40,
+        "engine_depth": 1,
+    },
+    "intermediate": {
+        "simulations": 200,
+        "temperature": 0.8,
+        "blunder_chance": 0.15,
+        "blunder_top_n": 5,
+        "miss_tactics": 0.15,
+        "engine_depth": 3,
+    },
+    "advanced": {
+        "simulations": 800,
+        "temperature": 0.3,
+        "blunder_chance": 0.05,
+        "blunder_top_n": 3,
+        "miss_tactics": 0.0,
+        "engine_depth": 5,
+    },
+    "expert": {
+        "simulations": 1600,
+        "temperature": 0.1,
+        "blunder_chance": 0.0,
+        "blunder_top_n": 1,
+        "miss_tactics": 0.0,
+        "engine_depth": 7,
+    },
+    "master": {
+        "simulations": 3200,
+        "temperature": 0.05,
+        "blunder_chance": 0.0,
+        "blunder_top_n": 1,
+        "miss_tactics": 0.0,
+        "engine_depth": 9,
+    },
+}

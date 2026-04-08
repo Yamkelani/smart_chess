@@ -59,11 +59,11 @@ export class ChessAPI {
     return resp.json();
   }
 
-  async engineMove(gameId) {
+  async engineMove(gameId, depth = 4) {
     if (isTauri()) {
-      return invoke('engine_move', { gameId });
+      return invoke('engine_move', { gameId, depth });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/engine-move`, {
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/engine-move?depth=${depth}`, {
       method: 'POST',
     });
     if (!resp.ok) throw new Error(await resp.text());
