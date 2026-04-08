@@ -100,6 +100,8 @@ impl GameState {
             self.status = GameStatus::Draw;
         } else if self.is_threefold_repetition() {
             self.status = GameStatus::Draw;
+        } else if self.board.has_insufficient_material() {
+            self.status = GameStatus::Draw;
         }
 
         let is_check = self.board.is_in_check();
@@ -119,10 +121,11 @@ impl GameState {
             return false;
         }
         let current = &self.fen_history[self.fen_history.len() - 1];
-        // Compare only piece placement and side to move (first two parts of FEN)
-        let current_pos: String = current.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        // Compare piece placement, side to move, castling rights, and en passant (first 4 FEN parts)
+        // per FIDE Article 9.2: positions are identical only when all four match
+        let current_pos: String = current.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
         let count = self.fen_history.iter().filter(|fen| {
-            let pos: String = fen.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+            let pos: String = fen.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
             pos == current_pos
         }).count();
         count >= 3

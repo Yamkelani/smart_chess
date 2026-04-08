@@ -271,6 +271,53 @@ impl Board {
         self.is_square_attacked(king_sq, self.side_to_move.opposite())
     }
 
+    /// Check for insufficient material to deliver checkmate (FIDE Article 5.2.2).
+    /// Returns true for these dead positions:
+    /// - K vs K
+    /// - K+B vs K
+    /// - K+N vs K
+    /// - K+B vs K+B (bishops on same color squares)
+    pub fn has_insufficient_material(&self) -> bool {
+        // If any pawns, rooks, or queens exist, material is sufficient
+        for ci in 0..2 {
+            if self.bitboards[ci][1] != 0 { return false; } // Queens
+            if self.bitboards[ci][2] != 0 { return false; } // Rooks
+            if self.bitboards[ci][5] != 0 { return false; } // Pawns
+        }
+
+        let white_knights = self.bitboards[0][4].count_ones();
+        let white_bishops = self.bitboards[0][3].count_ones();
+        let black_knights = self.bitboards[1][4].count_ones();
+        let black_bishops = self.bitboards[1][3].count_ones();
+
+        let white_minor = white_knights + white_bishops;
+        let black_minor = black_knights + black_bishops;
+
+        // K vs K
+        if white_minor == 0 && black_minor == 0 {
+            return true;
+        }
+
+        // K+N vs K or K+B vs K
+        if (white_minor == 1 && black_minor == 0) || (white_minor == 0 && black_minor == 1) {
+            return true;
+        }
+
+        // K+B vs K+B with bishops on the same color square
+        if white_bishops == 1 && black_bishops == 1 && white_knights == 0 && black_knights == 0 {
+            let w_bishop_sq = self.bitboards[0][3].trailing_zeros() as u8;
+            let b_bishop_sq = self.bitboards[1][3].trailing_zeros() as u8;
+            // Square color is determined by (rank + file) % 2
+            let w_color = (rank_of(w_bishop_sq) + file_of(w_bishop_sq)) % 2;
+            let b_color = (rank_of(b_bishop_sq) + file_of(b_bishop_sq)) % 2;
+            if w_color == b_color {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Parse a FEN string into a Board
     pub fn from_fen(fen: &str) -> Result<Self, String> {
         let parts: Vec<&str> = fen.split_whitespace().collect();
