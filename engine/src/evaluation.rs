@@ -695,12 +695,12 @@ fn alpha_beta_with_pv(
     use crate::moves::{generate_legal_moves, make_move, Move};
 
     if depth == 0 || max_pv_len == 0 {
-        return (evaluate_position(board), Vec::new());
+        return (evaluate(board), Vec::new());
     }
 
     let moves = generate_legal_moves(board);
     if moves.is_empty() {
-        return (evaluate_position(board), Vec::new());
+        return (evaluate(board), Vec::new());
     }
 
     let mut best_score = i32::MIN + 1;
