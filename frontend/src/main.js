@@ -1300,7 +1300,20 @@ class ChessGame {
       const div = document.createElement('div');
       div.className = 'tutor-tip';
       div.style.cssText = 'border-left:3px solid var(--accent-cyan);padding-left:8px;margin-bottom:4px;';
-      div.innerHTML = `<span class="tutor-tag" style="background:var(--accent-cyan)22;color:var(--accent-cyan);">🤖 AI MOVE</span> ${answer}${topMoves ? `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:3px;">Considered: ${topMoves}</div>` : ''}`;
+
+      const tag = document.createElement('span');
+      tag.className = 'tutor-tag';
+      tag.style.cssText = 'background:var(--accent-cyan)22;color:var(--accent-cyan);';
+      tag.textContent = '🤖 AI MOVE';
+      div.appendChild(tag);
+      div.appendChild(document.createTextNode(` ${answer}`));
+
+      if (topMoves) {
+        const considered = document.createElement('div');
+        considered.style.cssText = 'font-size:0.65rem;color:var(--text-muted);margin-top:3px;';
+        considered.textContent = `Considered: ${topMoves}`;
+        div.appendChild(considered);
+      }
       coachEl.prepend(div);
       // Keep coach panel trim
       while (coachEl.children.length > 6) coachEl.removeChild(coachEl.lastChild);
