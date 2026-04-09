@@ -36,6 +36,7 @@ from app.config import (
 from app.chess_env import board_to_tensor, move_to_index, MOVES_PER_SQUARE
 from app.self_play import TrainingExample, ReplayBuffer
 from app.model import ChessNetManager
+from app.monitoring import ModelMonitor
 
 
 @dataclass
@@ -66,10 +67,11 @@ class OnlineLearner:
     that grows over time, giving the AI genuine learning capability.
     """
 
-    def __init__(self, manager: ChessNetManager):
+    def __init__(self, manager: ChessNetManager, monitor: Optional[ModelMonitor] = None):
         self.manager = manager
         self.model = manager.get_model()
         self.device = manager.device
+        self.monitor = monitor
 
         # Active game sessions
         self.sessions: Dict[str, GameSession] = {}
@@ -219,6 +221,16 @@ class OnlineLearner:
         self.games_learned += 1
         self.total_positions_learned += num_positions
 
+        # Record game outcome in monitoring
+        if self.monitor:
+            self.monitor.record_game_outcome(
+                game_id=game_id,
+                result=result,
+                player_color=session.player_color,
+                num_moves=num_positions,
+                generation=self.manager.generation,
+            )
+
         return {
             "learned": True,
             "positions_added": num_positions,
@@ -297,18 +309,43 @@ class OnlineLearner:
                 total_value_loss += value_loss.item()
                 num_batches += 1
 
-            # Save updated model
+            # Only persist the model if loss improved (quality gate)
             self.model.eval()
-            self.manager.save_model()
-
-            elapsed = time.time() - start
             avg_policy = total_policy_loss / max(num_batches, 1)
             avg_value = total_value_loss / max(num_batches, 1)
+            new_total_loss = avg_policy + avg_value
+            prev_total_loss = (
+                (self.last_loss["policy"] + self.last_loss["value"])
+                if self.last_loss else float("inf")
+            )
+            if new_total_loss < prev_total_loss:
+                self.manager.save_model()
+                save_msg = "saved"
+            else:
+                save_msg = "skipped (loss did not improve)"
+
+            elapsed = time.time() - start
             self.last_loss = {"policy": avg_policy, "value": avg_value}
 
-            print(f"[OnlineLearner] quick train: {ONLINE_LEARNING_EPOCHS} epochs, "
-                  f"batch={batch_size}, policy_loss={avg_policy:.4f}, "
-                  f"value_loss={avg_value:.4f}, time={elapsed:.2f}s")
+            # Record to monitoring system
+            if self.monitor:
+                self.monitor.record_training_loss(
+                    generation=self.manager.generation,
+                    policy_loss=avg_policy,
+                    value_loss=avg_value,
+                    source="online",
+                    batch_size=batch_size,
+                    epochs=ONLINE_LEARNING_EPOCHS,
+                )
+
+            import logging as _log
+            _logger = _log.getLogger("ai-service")
+            _logger.info(
+                "[OnlineLearner] quick train: %d epochs, batch=%d, "
+                "policy_loss=%.4f, value_loss=%.4f, model=%s, time=%.2fs",
+                ONLINE_LEARNING_EPOCHS, batch_size, avg_policy, avg_value,
+                save_msg, elapsed,
+            )
 
             return {
                 "trained": True,
@@ -316,11 +353,13 @@ class OnlineLearner:
                 "batch_size": batch_size,
                 "policy_loss": round(avg_policy, 4),
                 "value_loss": round(avg_value, 4),
+                "model_save": save_msg,
                 "duration_ms": round(elapsed * 1000),
             }
 
         except Exception as e:
-            print(f"[OnlineLearner] training error: {e}")
+            import logging as _log
+            _log.getLogger("ai-service").error("[OnlineLearner] training error: %s", e)
             return {"trained": False, "error": str(e)}
         finally:
             self.training_in_progress = False
@@ -328,29 +367,27 @@ class OnlineLearner:
 
     # ---- Helpers ----
 
+    @staticmethod
+    def _extract_winner(result: str) -> Optional[str]:
+        """Extract winner color from engine status like 'Checkmate(white)'."""
+        import re
+        m = re.search(r'\(\s*(white|black)\s*\)', result, re.IGNORECASE)
+        return m.group(1).lower() if m else None
+
     def _result_to_value(self, result: str, player_color: str) -> float:
         """
         Convert a game result string to a value from white's perspective.
-        The AI plays the opposite of player_color.
+        +1.0 = white won, -1.0 = black won, 0.0 = draw.
         """
         result_lower = result.lower()
 
-        if "checkmate" in result_lower:
-            # The side that just moved delivered checkmate
-            # If it's checkmate and AI lost, the player won
-            # We need to figure out who won from context
-            # When checkmate happens, the side to move lost
-            # Since we track player_color, AI is opposite
-            # The caller should pass the status from engine which says "Checkmate"
-            # after a game-ending move. The side that can't move lost.
-            # We return value from white's perspective based on who the AI is
-            ai_color = "black" if player_color == "white" else "white"
-            # If the game is over with checkmate, the last move won.
-            # We don't have direct info about who won, so infer from the AI
-            # returning the status. For safety, use 0 (neutral) if unclear.
-            # Actually — the game result will be checked after the status
-            # We'll be more precise in the endpoint.
-            return 0.0  # Will be overridden by explicit result setting
+        if "checkmate" in result_lower or "resign" in result_lower:
+            winner = self._extract_winner(result)
+            if winner == "white":
+                return 1.0
+            elif winner == "black":
+                return -1.0
+            # Could not determine winner — fall through to 0.0
 
         if "stalemate" in result_lower or "draw" in result_lower:
             return 0.0
@@ -413,6 +450,24 @@ class OnlineLearner:
         loss_info = self._quick_train()
         self.games_learned += 1
         self.total_positions_learned += num_positions
+
+        # Record game outcome in monitoring
+        if self.monitor:
+            self.monitor.record_game_with_winner(
+                game_id=game_id,
+                result=result,
+                winner=winner,
+                player_color=session.player_color,
+                num_moves=num_positions,
+                generation=self.manager.generation,
+            )
+            # Periodically check for drift (every 10 games)
+            if self.games_learned % 10 == 0:
+                self.monitor.check_drift(self.manager.generation)
+            # Periodically evaluate model (every 25 games)
+            if self.games_learned % 25 == 0:
+                self.monitor.evaluate_model(
+                    self.model, self.device, self.manager.generation)
 
         return {
             "learned": True,

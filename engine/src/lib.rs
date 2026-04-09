@@ -6,3 +6,7 @@ pub mod game;
 pub mod api;
 pub mod attacks;
 pub mod persistence;
+pub mod chess960;
+pub mod variants;
+pub mod multiplayer;
+pub mod zobrist;

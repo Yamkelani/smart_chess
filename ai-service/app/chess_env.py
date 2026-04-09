@@ -35,7 +35,7 @@ KNIGHT_MOVES = [
 
 def board_to_tensor(board: chess.Board) -> np.ndarray:
     """
-    Convert a python-chess Board to an 18-channel 8x8 tensor.
+    Convert a python-chess Board to a 22-channel 8x8 tensor.
     
     Channels:
         0-5: White pieces (K, Q, R, B, N, P)
@@ -46,8 +46,12 @@ def board_to_tensor(board: chess.Board) -> np.ndarray:
         15: White queenside castling right
         16: Black kingside castling right
         17: Black queenside castling right
+        18: En passant square (single square = 1)
+        19: Halfmove clock (normalised 0-1)
+        20: Fullmove number (normalised 0-1)
+        21: Side to move (1 = white, 0 = black)
     """
-    tensor = np.zeros((18, 8, 8), dtype=np.float32)
+    tensor = np.zeros((22, 8, 8), dtype=np.float32)
     
     piece_map = {
         (chess.KING, chess.WHITE): 0,
@@ -87,7 +91,22 @@ def board_to_tensor(board: chess.Board) -> np.ndarray:
         tensor[16] = np.ones((8, 8), dtype=np.float32)
     if board.has_queenside_castling_rights(chess.BLACK):
         tensor[17] = np.ones((8, 8), dtype=np.float32)
-    
+
+    # En passant square
+    if board.ep_square is not None:
+        ep_rank = chess.square_rank(board.ep_square)
+        ep_file = chess.square_file(board.ep_square)
+        tensor[18][ep_rank][ep_file] = 1.0
+
+    # Halfmove clock (normalised by 100 – the 50-move rule threshold)
+    tensor[19] = np.full((8, 8), min(board.halfmove_clock / 100.0, 1.0), dtype=np.float32)
+
+    # Fullmove number (normalised by 200 – a practical upper bound)
+    tensor[20] = np.full((8, 8), min(board.fullmove_number / 200.0, 1.0), dtype=np.float32)
+
+    # Side to move (1 = white, 0 = black)
+    tensor[21] = np.full((8, 8), 1.0 if board.turn == chess.WHITE else 0.0, dtype=np.float32)
+
     # If it's black's turn, flip the board so the network always sees from the
     # perspective of the side to move
     if board.turn == chess.BLACK:
@@ -101,6 +120,8 @@ def board_to_tensor(board: chess.Board) -> np.ndarray:
         tensor[15] = tensor_copy[17]
         tensor[16] = tensor_copy[14]
         tensor[17] = tensor_copy[15]
+        # EP square already set; flip will handle rank mirroring
+        # Side-to-move stays as-is (already 0 for black)
         # Flip ranks
         tensor = tensor[:, ::-1, :].copy()
     

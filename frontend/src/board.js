@@ -145,6 +145,9 @@ export class ChessBoard3D {
     this._liftedPieceSq = null;
     this._liftedPieceOrigY = 0.04;
 
+    // Free-rotate mode (allows left-click drag rotation)
+    this._freeRotateMode = false;
+
     this._initScene();
     this._initBoard();
     this._initLights();
@@ -211,24 +214,36 @@ export class ChessBoard3D {
     const z = Math.cos(this.cameraOrbitAngle) * Math.cos(this.cameraOrbitPitch) * this.cameraOrbitDist;
     this.camera.position.set(x, y, z);
     this.camera.lookAt(this.cameraTarget.x, this.cameraTarget.y, this.cameraTarget.z);
+    this.camera.updateMatrixWorld(true);
   }
 
   _setupCameraOrbit() {
     let dragging = false;
     let lastX = 0, lastY = 0;
     let dragButton = -1;
+    let dragMoved = false;
+    let capturedPointerId = null;
+
+    // Public flag: true while orbit drag is active, so other systems can check
+    this.isOrbiting = false;
+    // Flag: set to true after an orbit drag ends, cleared on next click
+    this._orbitJustEnded = false;
 
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     this.canvas.addEventListener('pointerdown', (e) => {
       // Allow right-click and middle-click for orbit
-      // Also allow left-click drag when holding Shift or Alt
-      if (e.button === 2 || e.button === 1 || (e.button === 0 && (e.shiftKey || e.altKey))) {
+      // Also allow left-click drag when holding Shift/Alt, or when free-rotate mode is on
+      const leftOrbit = e.button === 0 && (e.shiftKey || e.altKey || this._freeRotateMode);
+      if (e.button === 2 || e.button === 1 || leftOrbit) {
         dragging = true;
+        dragMoved = false;
         dragButton = e.button;
         lastX = e.clientX;
         lastY = e.clientY;
-        this.canvas.setPointerCapture(e.pointerId);
+        capturedPointerId = e.pointerId;
+        this.isOrbiting = true;
+        try { this.canvas.setPointerCapture(e.pointerId); } catch (_) {}
       }
     });
 
@@ -236,6 +251,7 @@ export class ChessBoard3D {
       if (!dragging) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) dragMoved = true;
       this.cameraOrbitAngle -= dx * 0.005;
       this.cameraOrbitPitch = Math.max(0.05, Math.min(1.55, this.cameraOrbitPitch + dy * 0.005));
       lastX = e.clientX;
@@ -244,15 +260,88 @@ export class ChessBoard3D {
     });
 
     this.canvas.addEventListener('pointerup', (e) => {
+      if (!dragging) return;
       if (e.button === dragButton || e.button === 2 || e.button === 1) {
         dragging = false;
+        this.isOrbiting = false;
+        if (dragMoved) {
+          this._orbitJustEnded = true;
+          // Reset flag after a short delay so the next click isn't suppressed
+          setTimeout(() => { this._orbitJustEnded = false; }, 100);
+        }
         dragButton = -1;
+        if (capturedPointerId !== null) {
+          try { this.canvas.releasePointerCapture(capturedPointerId); } catch (_) {}
+          capturedPointerId = null;
+        }
+      }
+    });
+
+    // Also handle lostpointercapture to clean up
+    this.canvas.addEventListener('lostpointercapture', () => {
+      if (dragging) {
+        dragging = false;
+        this.isOrbiting = false;
+        dragButton = -1;
+        capturedPointerId = null;
       }
     });
 
     this.canvas.addEventListener('wheel', (e) => {
       this.cameraOrbitDist = Math.max(5, Math.min(25, this.cameraOrbitDist + e.deltaY * 0.01));
       this._updateCameraFromOrbit();
+    });
+
+    // ── Touch gesture support (rotate + pinch-zoom) ──
+    let touches = [];
+    let lastTouchDist = 0;
+    let lastTouchMidX = 0;
+    let lastTouchMidY = 0;
+
+    this.canvas.addEventListener('touchstart', (e) => {
+      touches = [...e.touches];
+      if (touches.length === 2) {
+        e.preventDefault();
+        const dx = touches[1].clientX - touches[0].clientX;
+        const dy = touches[1].clientY - touches[0].clientY;
+        lastTouchDist = Math.sqrt(dx * dx + dy * dy);
+        lastTouchMidX = (touches[0].clientX + touches[1].clientX) / 2;
+        lastTouchMidY = (touches[0].clientY + touches[1].clientY) / 2;
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const t0 = e.touches[0], t1 = e.touches[1];
+
+        // Pinch-to-zoom
+        const dx = t1.clientX - t0.clientX;
+        const dy = t1.clientY - t0.clientY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (lastTouchDist > 0) {
+          const scale = lastTouchDist / dist;
+          this.cameraOrbitDist = Math.max(5, Math.min(25, this.cameraOrbitDist * scale));
+        }
+        lastTouchDist = dist;
+
+        // Two-finger drag to rotate
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+        const mdx = midX - lastTouchMidX;
+        const mdy = midY - lastTouchMidY;
+        this.cameraOrbitAngle -= mdx * 0.005;
+        this.cameraOrbitPitch = Math.max(0.05, Math.min(1.55, this.cameraOrbitPitch + mdy * 0.005));
+        lastTouchMidX = midX;
+        lastTouchMidY = midY;
+
+        this._updateCameraFromOrbit();
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchend', () => {
+      touches = [];
+      lastTouchDist = 0;
     });
   }
 
@@ -1178,6 +1267,7 @@ export class ChessBoard3D {
 
       mesh.userData = { square: sq, pieceType: typeLetter, isWhite };
       mesh.position.set(worldPos.x, 0.04, worldPos.z);
+      if (this._blindfoldMode) mesh.visible = false;
       this.scene.add(mesh);
       this.pieceMeshes.set(sq, mesh);
     }
@@ -1905,5 +1995,20 @@ export class ChessBoard3D {
     this._resizeObserver.disconnect();
     this.composer.dispose();
     this.renderer.dispose();
+  }
+
+  // ── Blindfold mode ──
+
+  setBlindfold(enabled) {
+    this._blindfoldMode = !!enabled;
+    this.pieceMeshes.forEach((mesh) => {
+      mesh.visible = !this._blindfoldMode;
+    });
+  }
+
+  // ── Free-rotate mode ──
+
+  setFreeRotate(enabled) {
+    this._freeRotateMode = !!enabled;
   }
 }

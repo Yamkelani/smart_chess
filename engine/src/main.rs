@@ -11,6 +11,10 @@ mod game;
 mod api;
 mod persistence;
 pub mod attacks;
+mod chess960;
+mod variants;
+mod multiplayer;
+mod zobrist;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -31,6 +35,8 @@ async fn main() -> std::io::Result<()> {
     let app_state = web::Data::new(api::AppState {
         games: Mutex::new(initial_games),
     });
+
+    let mp_state = web::Data::new(multiplayer::MultiplayerState::new());
 
     // Allowed CORS origins — set ALLOWED_ORIGINS env var as a comma-separated list.
     // Defaults to localhost dev origins only.
@@ -53,7 +59,9 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(app_state.clone())
+            .app_data(mp_state.clone())
             .configure(api::configure_routes)
+            .configure(multiplayer::configure_multiplayer_routes)
     })
     .bind(&bind_addr)?
     .run()

@@ -41,7 +41,9 @@ pub fn load_games() -> Result<HashMap<String, GameState>, String> {
         }
         match fs::read_to_string(&path) {
             Ok(json) => match serde_json::from_str::<GameState>(&json) {
-                Ok(game) => {
+                Ok(mut game) => {
+                    // Rebuild derived caches that are skipped during serialization
+                    game.board.rebuild_mailbox();
                     games.insert(game.id.clone(), game);
                 }
                 Err(e) => {
@@ -55,6 +57,22 @@ pub fn load_games() -> Result<HashMap<String, GameState>, String> {
     }
 
     Ok(games)
+}
+
+/// Load a single game by ID from disk. Returns None if not found or corrupt.
+pub fn load_game(game_id: &str) -> Option<GameState> {
+    let path = games_dir().join(format!("{}.json", game_id));
+    let json = fs::read_to_string(&path).ok()?;
+    match serde_json::from_str::<GameState>(&json) {
+        Ok(mut game) => {
+            game.board.rebuild_mailbox();
+            Some(game)
+        }
+        Err(e) => {
+            log::warn!("Corrupt game file {}: {}", path.display(), e);
+            None
+        }
+    }
 }
 
 /// Delete a game file from disk (e.g. after it ends or is abandoned).

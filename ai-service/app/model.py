@@ -2,7 +2,7 @@
 AlphaZero-inspired Neural Network for Chess
 
 Architecture:
-- Input: 18-channel 8x8 board representation
+- Input: 22-channel 8x8 board representation
 - Body: Residual tower with batch normalization
 - Policy Head: Predicts move probabilities
 - Value Head: Predicts position evaluation [-1, 1]
@@ -45,12 +45,16 @@ class ChessNet(nn.Module):
     """
     AlphaZero-style neural network for chess.
     
-    Input: (batch, 18, 8, 8) tensor encoding:
+    Input: (batch, 22, 8, 8) tensor encoding:
         - Channels 0-5: White pieces (K, Q, R, B, N, P)
         - Channels 6-11: Black pieces (K, Q, R, B, N, P)
         - Channel 12: All white pieces
         - Channel 13: All black pieces
-        - Channel 14-17: Castling rights (WK, WQ, BK, BQ)
+        - Channels 14-17: Castling rights (WK, WQ, BK, BQ)
+        - Channel 18: En passant square
+        - Channel 19: Halfmove clock (normalized)
+        - Channel 20: Fullmove number (normalized)
+        - Channel 21: Side to move
     
     Output:
         - policy: (batch, 4672) move probabilities

@@ -59,12 +59,58 @@ export class ChessAPI {
     return resp.json();
   }
 
-  async engineMove(gameId) {
+  async engineMove(gameId, depth = 4) {
     if (isTauri()) {
-      return invoke('engine_move', { gameId });
+      return invoke('engine_move', { gameId, depth });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/engine-move`, {
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/engine-move?depth=${depth}`, {
       method: 'POST',
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  /**
+   * Notify the engine that a player has resigned.
+   */
+  async resignGame(gameId, color) {
+    if (isTauri()) {
+      return invoke('resign_game', { gameId, color });
+    }
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/resign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  /**
+   * Notify the engine of an agreed draw.
+   */
+  async drawGame(gameId) {
+    if (isTauri()) {
+      return invoke('draw_game', { gameId });
+    }
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/draw`, {
+      method: 'POST',
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  /**
+   * Set position on an existing game (for undo without creating a new game).
+   */
+  async setPosition(gameId, fen) {
+    if (isTauri()) {
+      return invoke('set_position', { gameId, fen });
+    }
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/set-position`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen }),
     });
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
@@ -465,5 +511,121 @@ export class ChessAPI {
       console.warn('Drill check unavailable');
     }
     return null;
+  }
+
+  // ── Chess960 ──
+
+  async chess960Random() {
+    if (isTauri()) {
+      return invoke('chess960_random', {});
+    }
+    const resp = await fetch(`${getEngineBase()}/chess960/random`);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async chess960Position(id) {
+    if (isTauri()) {
+      return invoke('chess960_position', { id });
+    }
+    const resp = await fetch(`${getEngineBase()}/chess960/${id}`);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  // ── Variants ──
+
+  async listVariants() {
+    if (isTauri()) {
+      return invoke('list_variants', {});
+    }
+    const resp = await fetch(`${getEngineBase()}/variants`);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async newVariantGame(variant, fen = null) {
+    if (isTauri()) {
+      return invoke('new_variant_game', { variant, fen: fen || null });
+    }
+    const body = { variant };
+    if (fen) body.fen = fen;
+    const resp = await fetch(`${getEngineBase()}/game/new-variant`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  // ── Multiplayer ──
+
+  async mpCreateRoom(options = {}) {
+    const resp = await fetch(`${getEngineBase()}/multiplayer/room/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async mpJoinRoom(code, playerName) {
+    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ player_name: playerName }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async mpGetRoom(code) {
+    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}`);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async mpMakeMove(code, playerId, uci) {
+    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ player_id: playerId, uci }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async mpChat(code, playerId, content) {
+    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sender_id: playerId, content }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async mpListRooms() {
+    const resp = await fetch(`${getEngineBase()}/multiplayer/room/list`);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async mpLeaveRoom(code, playerId) {
+    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/leave`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ player_id: playerId }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  async getLeaderboard() {
+    const resp = await fetch(`${getEngineBase()}/leaderboard`);
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
   }
 }

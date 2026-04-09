@@ -11,19 +11,33 @@ game played, recording positions and training after each game completes.
 
 import os
 import asyncio
+import time
+import logging
 import httpx
 import chess
 import numpy as np
 import torch
+from collections import defaultdict
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 
+# ---- Structured logging ----
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+logger = logging.getLogger("ai-service")
+
 from app.config import (
     AI_SERVICE_HOST, AI_SERVICE_PORT, ENGINE_URL,
-    DIFFICULTY_LEVELS, MCTS_SIMULATIONS, MCTS_TEMPERATURE, MAX_MCTS_SIMULATIONS
+    DIFFICULTY_LEVELS, DIFFICULTY_PROFILES, MCTS_SIMULATIONS, MCTS_TEMPERATURE,
+    MAX_MCTS_SIMULATIONS
 )
 from app.model import ChessNetManager
 from app.mcts import MCTS
@@ -95,32 +109,43 @@ class HealthResponse(BaseModel):
 manager: Optional[ChessNetManager] = None
 http_client: Optional[httpx.AsyncClient] = None
 online_learner = None  # OnlineLearner instance
+model_monitor = None   # ModelMonitor instance
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
-    global manager, http_client, online_learner
-    print("Starting 3D Chess AI Service...")
+    global manager, http_client, online_learner, model_monitor
+    logger.info("Starting 3D Chess AI Service...")
 
     manager = ChessNetManager()
     http_client = httpx.AsyncClient(base_url=ENGINE_URL, timeout=30.0)
 
-    # Initialize online learning system
-    from app.online_learner import OnlineLearner
-    online_learner = OnlineLearner(manager)
+    # Initialize monitoring system
+    from app.monitoring import ModelMonitor
+    model_monitor = ModelMonitor()
 
-    print(f"Model generation: {manager.generation}")
-    print(f"Device: {manager.device}")
-    print(f"Engine URL: {ENGINE_URL}")
-    print(f"Online learning: ACTIVE (buffer: {len(online_learner.replay_buffer)} positions)")
+    # Initialize online learning system (with monitor)
+    from app.online_learner import OnlineLearner
+    online_learner = OnlineLearner(manager, monitor=model_monitor)
+
+    # Run initial model evaluation against benchmarks
+    model_monitor.evaluate_model(
+        manager.get_model(), manager.device, manager.generation)
+
+    logger.info("Model generation: %s", manager.generation)
+    logger.info("Device: %s", manager.device)
+    logger.info("Engine URL: %s", ENGINE_URL)
+    logger.info("Online learning: ACTIVE (buffer: %d positions)", len(online_learner.replay_buffer))
+    logger.info("Monitoring: ACTIVE (ELO: %.0f, "
+          f"games tracked: {model_monitor.total_games})")
 
     yield
 
     # Shutdown
     if http_client:
         await http_client.aclose()
-    print("AI Service shut down.")
+    logger.info("AI Service shut down.")
 
 
 app = FastAPI(
@@ -130,21 +155,64 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# ---- Global exception handler ----
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"},
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(","),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+# ---- Simple in-memory rate limiter ----
+_rate_buckets: Dict[str, list] = defaultdict(list)
+_RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "120"))  # requests per minute per IP
+_RATE_WINDOW = 60.0  # seconds
+_rate_last_cleanup = time.time()
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    global _rate_last_cleanup
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    bucket = _rate_buckets[client_ip]
+    # Prune old entries for this IP
+    _rate_buckets[client_ip] = [t for t in bucket if now - t < _RATE_WINDOW]
+    # Periodically evict stale IPs (every 5 minutes)
+    if now - _rate_last_cleanup > 300:
+        stale_ips = [ip for ip, ts in _rate_buckets.items() if not ts or now - max(ts) > _RATE_WINDOW]
+        for ip in stale_ips:
+            del _rate_buckets[ip]
+        _rate_last_cleanup = now
+    if len(_rate_buckets[client_ip]) >= _RATE_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Try again later."},
+        )
+    _rate_buckets[client_ip].append(now)
+    return await call_next(request)
 
 
 # ---- Helper Functions ----
 
+def get_difficulty_profile(difficulty: str) -> dict:
+    """Return the full difficulty profile dict for a named level."""
+    return DIFFICULTY_PROFILES.get(difficulty, DIFFICULTY_PROFILES["intermediate"])
+
+
 def get_simulations(difficulty: str, requested: int | None = None) -> int:
     """Get MCTS simulation count for a difficulty level, capped at MAX_MCTS_SIMULATIONS."""
-    base = DIFFICULTY_LEVELS.get(difficulty, DIFFICULTY_LEVELS["intermediate"])
-    count = requested if requested is not None else base
+    profile = get_difficulty_profile(difficulty)
+    count = requested if requested is not None else profile["simulations"]
     return min(count, MAX_MCTS_SIMULATIONS)
 
 
@@ -206,6 +274,125 @@ def run_mcts(fen: str, num_simulations: int,
     }
 
 
+def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str,
+                            style_bias: str = None) -> dict:
+    """
+    Post-process an MCTS result to simulate human-like play at lower difficulty.
+
+    At lower levels the AI will:
+    1. Blunder — randomly pick from the top-N moves instead of the best.
+    2. Miss tactics — occasionally ignore captures / checks.
+    3. Use higher temperature (already handled during MCTS), so this focuses
+       on the *additional* blunder / miss-tactics logic.
+    4. Apply style_bias to prefer certain move types.
+    """
+    import random
+    profile = get_difficulty_profile(difficulty)
+
+    blunder_chance = profile["blunder_chance"]
+    blunder_top_n = profile["blunder_top_n"]
+    miss_tactics = profile["miss_tactics"]
+
+    # Nothing to do at expert / master
+    if blunder_chance <= 0 and miss_tactics <= 0:
+        return mcts_result
+
+    board = chess.Board(fen)
+    top_moves = mcts_result.get("top_moves", [])
+    if len(top_moves) < 2:
+        return mcts_result  # only one legal move — no choice
+
+    # ── Miss-tactics filter ──────────────────────────────────────────
+    # With probability `miss_tactics`, remove tactical moves (captures /
+    # checks) from the candidate pool so the AI "overlooks" them.
+    candidates = list(top_moves)
+    if miss_tactics > 0 and random.random() < miss_tactics:
+        non_tactical = []
+        for m in candidates:
+            try:
+                move_obj = chess.Move.from_uci(m["move"])
+                is_capture = board.is_capture(move_obj)
+                board.push(move_obj)
+                gives_check = board.is_check()
+                board.pop()
+                if not is_capture and not gives_check:
+                    non_tactical.append(m)
+            except Exception:
+                non_tactical.append(m)
+        # Only filter if we still have at least one candidate left
+        if non_tactical:
+            candidates = non_tactical
+
+    # ── Style-bias reranking ──────────────────────────────────────────
+    # Adjust candidate order based on personality style_bias.
+    if style_bias and len(candidates) > 1:
+        candidates = _apply_style_bias(candidates, board, style_bias)
+
+    # ── Blunder roll ─────────────────────────────────────────────────
+    if blunder_chance > 0 and random.random() < blunder_chance:
+        pool = candidates[:blunder_top_n]
+        chosen = random.choice(pool)
+    else:
+        chosen = candidates[0]  # best available
+
+    # Overwrite the selected move in the result dict
+    mcts_result["move"] = chosen["move"]
+    return mcts_result
+
+
+def _apply_style_bias(candidates: list, board: chess.Board, style: str) -> list:
+    """Re-rank moves according to personality style.
+
+    Each style awards bonus weight to moves that match its philosophy.
+    The candidate list is re-sorted by  `original_probability + bonus`.
+    """
+    scored = []
+    for m in candidates:
+        bonus = 0.0
+        try:
+            move_obj = chess.Move.from_uci(m["move"])
+            is_capture = board.is_capture(move_obj)
+            board.push(move_obj)
+            gives_check = board.is_check()
+            num_legal = board.legal_moves.count()
+            board.pop()
+
+            if style == "aggressive":
+                if is_capture: bonus += 0.15
+                if gives_check: bonus += 0.20
+                # Prefer moves that restrict opponent mobility
+                if num_legal < 20: bonus += 0.05
+            elif style == "positional":
+                # Prefer quiet manoeuvring moves (non-captures)
+                if not is_capture and not gives_check: bonus += 0.12
+                # Slight bonus for central control (to-square in d4-e5 region)
+                to_sq = move_obj.to_square
+                r, f = chess.square_rank(to_sq), chess.square_file(to_sq)
+                if 2 <= r <= 5 and 2 <= f <= 5: bonus += 0.05
+            elif style == "trappy":
+                if gives_check: bonus += 0.10
+                if is_capture: bonus += 0.08
+                # Prefer moves that open lines (pieces develop)
+                if move_obj.from_square in [1,2,5,6,57,58,61,62]:  # knight starting sqs
+                    bonus += 0.06
+            elif style == "defensive":
+                # Prefer castling, king-side consolidation, avoid risky captures
+                if board.is_castling(move_obj): bonus += 0.25
+                if not is_capture: bonus += 0.08
+                # Avoid pushing the king's pawn shield
+                piece = board.piece_at(move_obj.from_square)
+                if piece and piece.piece_type == chess.PAWN:
+                    king_sq = board.king(board.turn)
+                    if king_sq is not None and abs(chess.square_file(move_obj.from_square) - chess.square_file(king_sq)) <= 1:
+                        bonus -= 0.10  # Penalise weakening king shelter
+        except Exception:
+            pass
+        scored.append((m, m.get("probability", 0) + bonus))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [s[0] for s in scored]
+
+
 # ---- Engine Communication ----
 
 async def engine_new_game(fen: Optional[str] = None) -> dict:
@@ -244,11 +431,25 @@ async def health_check():
 async def ai_move(req: AIMoveRequest):
     """Get an AI move for a given position."""
     try:
+        profile = get_difficulty_profile(req.difficulty)
         sims = get_simulations(req.difficulty)
-        # Apply personality temperature override
+        # Temperature: use request override > personality override > difficulty profile default
         personality = AI_PERSONALITIES.get(req.personality or "default", AI_PERSONALITIES["default"])
-        temp = req.temperature if req.temperature is not None else personality["temperature"]
-        result = run_mcts(req.fen, num_simulations=sims, temperature=temp)
+        if req.temperature is not None:
+            temp = req.temperature
+        elif personality["temperature"] is not None:
+            temp = personality["temperature"]
+        else:
+            temp = profile["temperature"]
+        # At lower difficulties, use the higher of personality temp and profile temp
+        # so the AI always feels appropriately imprecise
+        if req.difficulty in ("beginner", "intermediate"):
+            temp = max(temp, profile["temperature"])
+        result = await asyncio.to_thread(run_mcts, req.fen, sims, temp)
+
+        # Apply difficulty-based blunder / miss-tactics filtering
+        style = personality.get("style_bias") if personality else None
+        result = apply_difficulty_filter(result, req.difficulty, req.fen, style_bias=style)
 
         # Record position for online learning
         if online_learner and req.game_id:
@@ -280,7 +481,7 @@ async def game_complete(req: GameCompleteRequest):
         result = online_learner.complete_game(req.game_id, req.result)
         return result
     except Exception as e:
-        print(f"[game-complete] error: {e}")
+        logger.error("[game-complete] error: %s", e)
         return {"learned": False, "error": str(e)}
 
 
@@ -291,11 +492,14 @@ async def ai_evaluate(req: EvalRequest):
         board = chess.Board(req.fen)
         sims = min(req.num_simulations or 200, MAX_MCTS_SIMULATIONS)
 
-        mcts = MCTS(
-            manager.get_model(), manager.device,
-            num_simulations=sims, add_noise=False
-        )
-        action_probs = mcts.get_action_probs(board, temperature=0.01)
+        def _eval_mcts():
+            m = MCTS(
+                manager.get_model(), manager.device,
+                num_simulations=sims, add_noise=False
+            )
+            return m.get_action_probs(board, temperature=0.01)
+
+        action_probs = await asyncio.to_thread(_eval_mcts)
 
         from app.chess_env import board_to_tensor
         tensor = board_to_tensor(board)
@@ -334,7 +538,7 @@ async def start_game(req: GamePlayRequest):
         # If player chose black, AI plays white first
         if req.player_color == "black":
             sims = get_simulations(req.difficulty)
-            result = run_mcts(engine_data["fen"], num_simulations=sims, temperature=0.5)
+            result = await asyncio.to_thread(run_mcts, engine_data["fen"], sims, 0.5)
             move_data = await engine_make_move(game_id, result["move"])
             ai_move_uci = result["move"]
 
@@ -388,7 +592,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
                 learn_result = online_learner.complete_game_with_winner(
                     game_id, game_data["status"], winner
                 )
-                print(f"[Learning] game over after player move: {learn_result}")
+                logger.info("[Learning] game over after player move: %s", learn_result)
 
             return GamePlayResponse(
                 game_id=game_id,
@@ -402,7 +606,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
 
         # AI responds
         sims = get_simulations(req.difficulty)
-        result = run_mcts(game_data["fen"], num_simulations=sims, temperature=0.1)
+        result = await asyncio.to_thread(run_mcts, game_data["fen"], sims, 0.1)
 
         # Record the AI's position + MCTS policy for learning
         if online_learner:
@@ -420,7 +624,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
             learn_result = online_learner.complete_game_with_winner(
                 game_id, game_data["status"], winner
             )
-            print(f"[Learning] game over after AI move: {learn_result}")
+            logger.info("[Learning] game over after AI move: %s", learn_result)
 
         return GamePlayResponse(
             game_id=game_id,
@@ -469,6 +673,66 @@ async def learning_status():
     if not online_learner:
         return {"status": "disabled"}
     return online_learner.get_status()
+
+
+# ═══════════════════════════════════════════════════
+# AI MODEL MONITORING ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+@app.get("/ai/monitoring/dashboard")
+async def monitoring_dashboard():
+    """
+    Comprehensive monitoring dashboard — training quality, win rates,
+    drift detection, ELO tracking, and active alerts.
+    """
+    if not model_monitor or not manager:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return model_monitor.get_dashboard(manager.generation)
+
+
+@app.get("/ai/monitoring/loss-history")
+async def monitoring_loss_history(limit: int = 100):
+    """Return training loss history over time (policy + value)."""
+    if not model_monitor:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return {"loss_history": model_monitor.get_loss_history(limit)}
+
+
+@app.get("/ai/monitoring/win-rate")
+async def monitoring_win_rate(window: int = 10):
+    """Return rolling win-rate trend for AI games."""
+    if not model_monitor:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return {"win_rate_trend": model_monitor.get_win_rate_trend(window)}
+
+
+@app.get("/ai/monitoring/drift")
+async def monitoring_drift():
+    """Run drift detection and return the report."""
+    if not model_monitor or not manager:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return model_monitor.check_drift(manager.generation)
+
+
+@app.get("/ai/monitoring/evaluate")
+async def monitoring_evaluate():
+    """
+    Evaluate the current model against benchmark positions.
+    Returns accuracy (% best moves found) and value prediction quality.
+    """
+    if not model_monitor or not manager:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    return model_monitor.evaluate_model(
+        manager.get_model(), manager.device, manager.generation)
+
+
+@app.post("/ai/monitoring/acknowledge-alert")
+async def monitoring_acknowledge_alert(index: int):
+    """Acknowledge (dismiss) a monitoring alert."""
+    if not model_monitor:
+        raise HTTPException(status_code=503, detail="Monitoring not initialized")
+    model_monitor.acknowledge_alert(index)
+    return {"acknowledged": True}
 
 
 @app.get("/ai/difficulties")

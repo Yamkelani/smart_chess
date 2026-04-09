@@ -1,6 +1,6 @@
 use crate::board::Board;
 use crate::moves::{generate_legal_moves, make_move, Move};
-use crate::piece::Color;
+use crate::zobrist::hash_board;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -22,12 +22,15 @@ pub struct GameState {
     pub fen_history: Vec<String>,      // FEN after each move
     pub white_player: String,
     pub black_player: String,
+    #[serde(default)]
+    pub hash_history: Vec<u64>,        // Zobrist hashes for fast repetition detection
 }
 
 impl GameState {
     pub fn new() -> Self {
         let board = Board::new();
         let initial_fen = board.to_fen();
+        let initial_hash = hash_board(&board);
         Self {
             id: Uuid::new_v4().to_string(),
             board,
@@ -36,12 +39,14 @@ impl GameState {
             fen_history: vec![initial_fen],
             white_player: "human".to_string(),
             black_player: "ai".to_string(),
+            hash_history: vec![initial_hash],
         }
     }
 
     pub fn from_fen(fen: &str) -> Result<Self, String> {
         let board = Board::from_fen(fen)?;
         let initial_fen = board.to_fen();
+        let initial_hash = hash_board(&board);
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             board,
@@ -50,6 +55,7 @@ impl GameState {
             fen_history: vec![initial_fen],
             white_player: "human".to_string(),
             black_player: "ai".to_string(),
+            hash_history: vec![initial_hash],
         })
     }
 
@@ -86,6 +92,7 @@ impl GameState {
         self.board = new_board;
         self.move_history.push(uci.to_string());
         self.fen_history.push(self.board.to_fen());
+        self.hash_history.push(hash_board(&self.board));
 
         // Check for game-ending conditions
         let next_legal_moves = generate_legal_moves(&self.board);
@@ -96,9 +103,15 @@ impl GameState {
             } else {
                 self.status = GameStatus::Stalemate;
             }
-        } else if self.board.halfmove_clock >= 100 {
+        } else if self.board.halfmove_clock >= 150 {
+            // FIDE 9.6.2: automatic draw at 75 moves (150 half-moves)
+            self.status = GameStatus::Draw;
+        } else if self.is_fivefold_repetition() {
+            // FIDE 9.6.1: automatic draw at 5 repetitions
             self.status = GameStatus::Draw;
         } else if self.is_threefold_repetition() {
+            self.status = GameStatus::Draw;
+        } else if self.board.has_insufficient_material() {
             self.status = GameStatus::Draw;
         }
 
@@ -114,18 +127,31 @@ impl GameState {
         })
     }
 
-    fn is_threefold_repetition(&self) -> bool {
-        if self.fen_history.len() < 6 {
-            return false;
+    fn position_repetition_count(&self) -> usize {
+        // Use Zobrist hashes for O(n) repetition detection instead of O(n²) FEN parsing.
+        // Falls back to FEN comparison if hash_history is empty (legacy saved games).
+        if !self.hash_history.is_empty() {
+            let current = *self.hash_history.last().unwrap();
+            return self.hash_history.iter().filter(|&&h| h == current).count();
+        }
+        // Fallback: FEN-based comparison for games without hash_history
+        if self.fen_history.len() < 2 {
+            return 1;
         }
         let current = &self.fen_history[self.fen_history.len() - 1];
-        // Compare only piece placement and side to move (first two parts of FEN)
-        let current_pos: String = current.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
-        let count = self.fen_history.iter().filter(|fen| {
-            let pos: String = fen.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        let current_pos: String = current.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
+        self.fen_history.iter().filter(|fen| {
+            let pos: String = fen.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
             pos == current_pos
-        }).count();
-        count >= 3
+        }).count()
+    }
+
+    fn is_threefold_repetition(&self) -> bool {
+        self.position_repetition_count() >= 3
+    }
+
+    fn is_fivefold_repetition(&self) -> bool {
+        self.position_repetition_count() >= 5
     }
 }
 
