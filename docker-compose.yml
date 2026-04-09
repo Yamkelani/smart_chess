@@ -8,6 +8,14 @@ services:
     environment:
       - ENGINE_PORT=8081
       - RUST_LOG=info
+    volumes:
+      - engine-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   ai-service:
     build:
@@ -24,7 +32,14 @@ services:
       - ai-models:/app/models
       - ai-training:/app/training_data
     depends_on:
-      - engine
+      engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   frontend:
     build:
@@ -33,9 +48,18 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - engine
-      - ai-service
+      engine:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
+  engine-data:
   ai-models:
   ai-training:

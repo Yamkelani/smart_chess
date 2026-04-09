@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use crate::attacks;
 use crate::board::Board;
 use crate::evaluation::{evaluate, search_best_move, search_top_moves};
-use crate::game::GameState;
+use crate::game::{GameState, GameStatus};
 use crate::moves::generate_legal_moves;
 use crate::persistence;
 use crate::chess960;
@@ -547,6 +547,83 @@ pub async fn new_variant_game(
     HttpResponse::Ok().json(response)
 }
 
+// ---- Resign / Offer-Draw endpoints ----
+
+#[derive(Deserialize)]
+pub struct ResignRequest {
+    /// "white" or "black"
+    pub color: String,
+}
+
+pub async fn resign_game(
+    data: web::Data<AppState>,
+    path: web::Path<String>,
+    body: web::Json<ResignRequest>,
+) -> impl Responder {
+    let game_id = path.into_inner();
+    let mut games = lock_games!(data);
+    let game = match games.get_mut(&game_id) {
+        Some(g) => g,
+        None => return HttpResponse::NotFound().json(ErrorResponse {
+            error: "Game not found".to_string(),
+        }),
+    };
+    if game.status != GameStatus::Active {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "Game is already over".to_string(),
+        });
+    }
+    let color = body.color.to_lowercase();
+    if color != "white" && color != "black" {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "color must be 'white' or 'black'".to_string(),
+        });
+    }
+    game.status = GameStatus::Resigned(color.clone());
+    let stm = if game.board.side_to_move == crate::piece::Color::White { "white" } else { "black" };
+    HttpResponse::Ok().json(GameStateResponse {
+        game_id: game.id.clone(),
+        fen: game.board.to_fen(),
+        side_to_move: stm.to_string(),
+        pieces: game.board.to_piece_list(),
+        status: format!("{:?}", game.status),
+        legal_moves: vec![],
+        move_history: game.move_history.clone(),
+        is_check: false,
+    })
+}
+
+pub async fn draw_game(
+    data: web::Data<AppState>,
+    path: web::Path<String>,
+) -> impl Responder {
+    let game_id = path.into_inner();
+    let mut games = lock_games!(data);
+    let game = match games.get_mut(&game_id) {
+        Some(g) => g,
+        None => return HttpResponse::NotFound().json(ErrorResponse {
+            error: "Game not found".to_string(),
+        }),
+    };
+    if game.status != GameStatus::Active {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "Game is already over".to_string(),
+        });
+    }
+    game.status = GameStatus::Draw;
+    let stm = if game.board.side_to_move == crate::piece::Color::White { "white" } else { "black" };
+    HttpResponse::Ok().json(GameStateResponse {
+        game_id: game.id.clone(),
+        fen: game.board.to_fen(),
+        side_to_move: stm.to_string(),
+        pieces: game.board.to_piece_list(),
+        status: format!("{:?}", game.status),
+        legal_moves: vec![],
+        move_history: game.move_history.clone(),
+        is_check: false,
+    })
+}
+
 /// Configure API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg
@@ -557,6 +634,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/game/{id}/move", web::post().to(make_move))
         .route("/game/{id}/moves", web::get().to(get_legal_moves))
         .route("/game/{id}/engine-move", web::post().to(engine_move))
+        .route("/game/{id}/resign", web::post().to(resign_game))
+        .route("/game/{id}/draw", web::post().to(draw_game))
         .route("/evaluate", web::post().to(evaluate_position))
         .route("/analyze", web::post().to(analyze_position))
         .route("/attack-map", web::post().to(attack_map))

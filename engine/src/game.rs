@@ -1,6 +1,5 @@
 use crate::board::Board;
 use crate::moves::{generate_legal_moves, make_move, Move};
-use crate::piece::Color;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -96,7 +95,14 @@ impl GameState {
             } else {
                 self.status = GameStatus::Stalemate;
             }
+        } else if self.board.halfmove_clock >= 150 {
+            // FIDE 9.6.2: automatic draw at 75 moves (150 half-moves)
+            self.status = GameStatus::Draw;
         } else if self.board.halfmove_clock >= 100 {
+            // FIDE 9.3: draw claim at 50 moves (100 half-moves) — auto-apply
+            self.status = GameStatus::Draw;
+        } else if self.is_fivefold_repetition() {
+            // FIDE 9.6.1: automatic draw at 5 repetitions
             self.status = GameStatus::Draw;
         } else if self.is_threefold_repetition() {
             self.status = GameStatus::Draw;
@@ -116,19 +122,24 @@ impl GameState {
         })
     }
 
-    fn is_threefold_repetition(&self) -> bool {
-        if self.fen_history.len() < 6 {
-            return false;
+    fn position_repetition_count(&self) -> usize {
+        if self.fen_history.len() < 2 {
+            return 1;
         }
         let current = &self.fen_history[self.fen_history.len() - 1];
-        // Compare piece placement, side to move, castling rights, and en passant (first 4 FEN parts)
-        // per FIDE Article 9.2: positions are identical only when all four match
         let current_pos: String = current.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
-        let count = self.fen_history.iter().filter(|fen| {
+        self.fen_history.iter().filter(|fen| {
             let pos: String = fen.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
             pos == current_pos
-        }).count();
-        count >= 3
+        }).count()
+    }
+
+    fn is_threefold_repetition(&self) -> bool {
+        self.position_repetition_count() >= 3
+    }
+
+    fn is_fivefold_repetition(&self) -> bool {
+        self.position_repetition_count() >= 5
     }
 }
 

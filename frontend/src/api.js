@@ -71,6 +71,36 @@ export class ChessAPI {
   }
 
   /**
+   * Notify the engine that a player has resigned.
+   */
+  async resignGame(gameId, color) {
+    if (isTauri()) {
+      return invoke('resign_game', { gameId, color });
+    }
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/resign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  /**
+   * Notify the engine of an agreed draw.
+   */
+  async drawGame(gameId) {
+    if (isTauri()) {
+      return invoke('draw_game', { gameId });
+    }
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/draw`, {
+      method: 'POST',
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  /**
    * Request an AI move. Retries up to MAX_AI_RETRIES times with exponential backoff
    * before giving up and returning null (caller falls back to the Rust engine).
    *

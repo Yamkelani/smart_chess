@@ -9,7 +9,7 @@ AI_SERVICE_PORT = int(os.getenv("AI_SERVICE_PORT", "8082"))
 ENGINE_URL = os.getenv("ENGINE_URL", "http://localhost:8081")
 
 # Neural Network Architecture
-NN_INPUT_CHANNELS = 18     # 12 piece planes + 2 color planes + 4 castling planes
+NN_INPUT_CHANNELS = 22     # 12 piece + 2 color + 4 castling + EP + halfmove + fullmove + side
 NN_BOARD_SIZE = 8
 NN_RESIDUAL_BLOCKS = 10    # Number of residual blocks (AlphaZero uses 19-39)
 NN_FILTERS = 128           # Filters per conv layer (AlphaZero uses 256)

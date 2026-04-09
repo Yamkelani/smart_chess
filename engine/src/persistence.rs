@@ -41,7 +41,9 @@ pub fn load_games() -> Result<HashMap<String, GameState>, String> {
         }
         match fs::read_to_string(&path) {
             Ok(json) => match serde_json::from_str::<GameState>(&json) {
-                Ok(game) => {
+                Ok(mut game) => {
+                    // Rebuild derived caches that are skipped during serialization
+                    game.board.rebuild_mailbox();
                     games.insert(game.id.clone(), game);
                 }
                 Err(e) => {

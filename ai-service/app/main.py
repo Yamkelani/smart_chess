@@ -12,6 +12,7 @@ game played, recording positions and training after each game completes.
 import os
 import asyncio
 import time
+import logging
 import httpx
 import chess
 import numpy as np
@@ -23,6 +24,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
+
+# ---- Structured logging ----
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+logger = logging.getLogger("ai-service")
 
 from app.config import (
     AI_SERVICE_HOST, AI_SERVICE_PORT, ENGINE_URL,
@@ -106,7 +116,7 @@ model_monitor = None   # ModelMonitor instance
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     global manager, http_client, online_learner, model_monitor
-    print("Starting 3D Chess AI Service...")
+    logger.info("Starting 3D Chess AI Service...")
 
     manager = ChessNetManager()
     http_client = httpx.AsyncClient(base_url=ENGINE_URL, timeout=30.0)
@@ -123,11 +133,11 @@ async def lifespan(app: FastAPI):
     model_monitor.evaluate_model(
         manager.get_model(), manager.device, manager.generation)
 
-    print(f"Model generation: {manager.generation}")
-    print(f"Device: {manager.device}")
-    print(f"Engine URL: {ENGINE_URL}")
-    print(f"Online learning: ACTIVE (buffer: {len(online_learner.replay_buffer)} positions)")
-    print(f"Monitoring: ACTIVE (ELO: {model_monitor.elo_rating:.0f}, "
+    logger.info("Model generation: %s", manager.generation)
+    logger.info("Device: %s", manager.device)
+    logger.info("Engine URL: %s", ENGINE_URL)
+    logger.info("Online learning: ACTIVE (buffer: %d positions)", len(online_learner.replay_buffer))
+    logger.info("Monitoring: ACTIVE (ELO: %.0f, "
           f"games tracked: {model_monitor.total_games})")
 
     yield
@@ -135,7 +145,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     if http_client:
         await http_client.aclose()
-    print("AI Service shut down.")
+    logger.info("AI Service shut down.")
 
 
 app = FastAPI(
@@ -144,6 +154,16 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+# ---- Global exception handler ----
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"},
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -157,14 +177,22 @@ app.add_middleware(
 _rate_buckets: Dict[str, list] = defaultdict(list)
 _RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "120"))  # requests per minute per IP
 _RATE_WINDOW = 60.0  # seconds
+_rate_last_cleanup = time.time()
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
+    global _rate_last_cleanup
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     bucket = _rate_buckets[client_ip]
-    # Prune old entries
+    # Prune old entries for this IP
     _rate_buckets[client_ip] = [t for t in bucket if now - t < _RATE_WINDOW]
+    # Periodically evict stale IPs (every 5 minutes)
+    if now - _rate_last_cleanup > 300:
+        stale_ips = [ip for ip, ts in _rate_buckets.items() if not ts or now - max(ts) > _RATE_WINDOW]
+        for ip in stale_ips:
+            del _rate_buckets[ip]
+        _rate_last_cleanup = now
     if len(_rate_buckets[client_ip]) >= _RATE_LIMIT:
         return JSONResponse(
             status_code=429,
@@ -246,7 +274,8 @@ def run_mcts(fen: str, num_simulations: int,
     }
 
 
-def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str) -> dict:
+def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str,
+                            style_bias: str = None) -> dict:
     """
     Post-process an MCTS result to simulate human-like play at lower difficulty.
 
@@ -255,6 +284,7 @@ def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str) -> dic
     2. Miss tactics — occasionally ignore captures / checks.
     3. Use higher temperature (already handled during MCTS), so this focuses
        on the *additional* blunder / miss-tactics logic.
+    4. Apply style_bias to prefer certain move types.
     """
     import random
     profile = get_difficulty_profile(difficulty)
@@ -293,6 +323,11 @@ def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str) -> dic
         if non_tactical:
             candidates = non_tactical
 
+    # ── Style-bias reranking ──────────────────────────────────────────
+    # Adjust candidate order based on personality style_bias.
+    if style_bias and len(candidates) > 1:
+        candidates = _apply_style_bias(candidates, board, style_bias)
+
     # ── Blunder roll ─────────────────────────────────────────────────
     if blunder_chance > 0 and random.random() < blunder_chance:
         pool = candidates[:blunder_top_n]
@@ -303,6 +338,59 @@ def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str) -> dic
     # Overwrite the selected move in the result dict
     mcts_result["move"] = chosen["move"]
     return mcts_result
+
+
+def _apply_style_bias(candidates: list, board: chess.Board, style: str) -> list:
+    """Re-rank moves according to personality style.
+
+    Each style awards bonus weight to moves that match its philosophy.
+    The candidate list is re-sorted by  `original_probability + bonus`.
+    """
+    scored = []
+    for m in candidates:
+        bonus = 0.0
+        try:
+            move_obj = chess.Move.from_uci(m["move"])
+            is_capture = board.is_capture(move_obj)
+            board.push(move_obj)
+            gives_check = board.is_check()
+            num_legal = board.legal_moves.count()
+            board.pop()
+
+            if style == "aggressive":
+                if is_capture: bonus += 0.15
+                if gives_check: bonus += 0.20
+                # Prefer moves that restrict opponent mobility
+                if num_legal < 20: bonus += 0.05
+            elif style == "positional":
+                # Prefer quiet manoeuvring moves (non-captures)
+                if not is_capture and not gives_check: bonus += 0.12
+                # Slight bonus for central control (to-square in d4-e5 region)
+                to_sq = move_obj.to_square
+                r, f = chess.square_rank(to_sq), chess.square_file(to_sq)
+                if 2 <= r <= 5 and 2 <= f <= 5: bonus += 0.05
+            elif style == "trappy":
+                if gives_check: bonus += 0.10
+                if is_capture: bonus += 0.08
+                # Prefer moves that open lines (pieces develop)
+                if move_obj.from_square in [1,2,5,6,57,58,61,62]:  # knight starting sqs
+                    bonus += 0.06
+            elif style == "defensive":
+                # Prefer castling, king-side consolidation, avoid risky captures
+                if board.is_castling(move_obj): bonus += 0.25
+                if not is_capture: bonus += 0.08
+                # Avoid pushing the king's pawn shield
+                piece = board.piece_at(move_obj.from_square)
+                if piece and piece.piece_type == chess.PAWN:
+                    king_sq = board.king(board.turn)
+                    if king_sq is not None and abs(chess.square_file(move_obj.from_square) - chess.square_file(king_sq)) <= 1:
+                        bonus -= 0.10  # Penalise weakening king shelter
+        except Exception:
+            pass
+        scored.append((m, m.get("probability", 0) + bonus))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [s[0] for s in scored]
 
 
 # ---- Engine Communication ----
@@ -360,7 +448,8 @@ async def ai_move(req: AIMoveRequest):
         result = await asyncio.to_thread(run_mcts, req.fen, sims, temp)
 
         # Apply difficulty-based blunder / miss-tactics filtering
-        result = apply_difficulty_filter(result, req.difficulty, req.fen)
+        style = personality.get("style_bias") if personality else None
+        result = apply_difficulty_filter(result, req.difficulty, req.fen, style_bias=style)
 
         # Record position for online learning
         if online_learner and req.game_id:
@@ -392,7 +481,7 @@ async def game_complete(req: GameCompleteRequest):
         result = online_learner.complete_game(req.game_id, req.result)
         return result
     except Exception as e:
-        print(f"[game-complete] error: {e}")
+        logger.error("[game-complete] error: %s", e)
         return {"learned": False, "error": str(e)}
 
 
@@ -503,7 +592,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
                 learn_result = online_learner.complete_game_with_winner(
                     game_id, game_data["status"], winner
                 )
-                print(f"[Learning] game over after player move: {learn_result}")
+                logger.info("[Learning] game over after player move: %s", learn_result)
 
             return GamePlayResponse(
                 game_id=game_id,
@@ -535,7 +624,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
             learn_result = online_learner.complete_game_with_winner(
                 game_id, game_data["status"], winner
             )
-            print(f"[Learning] game over after AI move: {learn_result}")
+            logger.info("[Learning] game over after AI move: %s", learn_result)
 
         return GamePlayResponse(
             game_id=game_id,

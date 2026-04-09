@@ -1294,7 +1294,10 @@ class ChessGame {
           this.board.highlightLastMove(this.lastMoveFrom, this.lastMoveTo);
           this._updateUI();
 
-          if (this.status !== 'Active') this._showGameOver();
+          if (this.status !== 'Active') {
+            this._showGameOver();
+            this._onGameEnd();
+          }
           return;
         }
       }
@@ -1324,7 +1327,10 @@ class ChessGame {
 
           this.board.setPieces(this.pieces);
           this._updateUI();
-          if (this.status !== 'Active') this._showGameOver();
+          if (this.status !== 'Active') {
+            this._showGameOver();
+            this._onGameEnd();
+          }
         }
       } catch (e2) {
         console.error('Engine fallback also failed:', e2);
@@ -1658,8 +1664,10 @@ class ChessGame {
     }
 
     try {
-      // Create a new engine game at the target position
+      // Create a new engine game at the target position, preserving the game_id
+      // for AI learning session continuity
       const data = await this.api.newGame(targetFen);
+      const previousGameId = this.gameId;
       this.gameId = data.game_id;
       this.fen = data.fen;
       this.pieces = data.pieces;
@@ -3603,6 +3611,10 @@ class ChessGame {
     this._stopTimer();
     const winner = this.playerColor === 'white' ? 'Black' : 'White';
     this.status = `${winner} wins by resignation`;
+    // Notify engine so server state is consistent
+    if (this.gameId) {
+      this.api.resignGame(this.gameId, this.playerColor).catch(() => {});
+    }
     this._showGameOver();
     this._onGameEnd();
   }
@@ -3617,6 +3629,9 @@ class ChessGame {
       if (accept) {
         this._stopTimer();
         this.status = 'Draw by agreement';
+        if (this.gameId) {
+          this.api.drawGame(this.gameId).catch(() => {});
+        }
         this._showGameOver();
         this._onGameEnd();
       } else {
@@ -3628,6 +3643,9 @@ class ChessGame {
       if (accepted) {
         this._stopTimer();
         this.status = 'Draw by agreement';
+        if (this.gameId) {
+          this.api.drawGame(this.gameId).catch(() => {});
+        }
         this._showGameOver();
         this._onGameEnd();
       }

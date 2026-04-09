@@ -15,6 +15,11 @@ pub struct Board {
     pub black_pieces: u64,
     pub all_pieces: u64,
 
+    // Mailbox: O(1) piece lookup by square index.
+    // Kept in sync with bitboards by set_piece / remove_piece.
+    #[serde(skip, default = "empty_mailbox")]
+    pub mailbox: [Option<Piece>; 64],
+
     // Game state
     pub side_to_move: Color,
     pub castling_rights: CastlingRights,
@@ -122,6 +127,11 @@ pub fn color_index(c: Color) -> usize {
     }
 }
 
+/// Default value for the mailbox field during deserialization (serde skip default).
+fn empty_mailbox() -> [Option<Piece>; 64] {
+    [None; 64]
+}
+
 impl Board {
     /// Create a new board with the standard starting position
     pub fn new() -> Self {
@@ -135,6 +145,7 @@ impl Board {
             white_pieces: 0,
             black_pieces: 0,
             all_pieces: 0,
+            mailbox: [None; 64],
             side_to_move: Color::White,
             castling_rights: CastlingRights::none(),
             en_passant_square: None,
@@ -145,11 +156,34 @@ impl Board {
         }
     }
 
+    /// Rebuild the mailbox cache from bitboards.
+    /// Must be called after deserialization (where mailbox is skipped by serde).
+    pub fn rebuild_mailbox(&mut self) {
+        self.mailbox = [None; 64];
+        let colors = [Color::White, Color::Black];
+        let piece_types = [
+            PieceType::King, PieceType::Queen, PieceType::Rook,
+            PieceType::Bishop, PieceType::Knight, PieceType::Pawn,
+        ];
+        for &color in &colors {
+            let ci = color_index(color);
+            for (pi, &pt) in piece_types.iter().enumerate() {
+                let mut bb = self.bitboards[ci][pi];
+                while bb != 0 {
+                    let sq = bb.trailing_zeros() as u8;
+                    self.mailbox[sq as usize] = Some(Piece { piece_type: pt, color });
+                    bb &= bb - 1;
+                }
+            }
+        }
+    }
+
     /// Set a piece on a square
     pub fn set_piece(&mut self, square: u8, piece: Piece) {
         let ci = color_index(piece.color);
         let pi = piece_type_index(piece.piece_type);
         self.bitboards[ci][pi] |= bit(square);
+        self.mailbox[square as usize] = Some(piece);
         self.update_occupancy();
         if piece.piece_type == PieceType::King {
             match piece.color {
@@ -167,21 +201,15 @@ impl Board {
                 self.bitboards[ci][pi] &= !b;
             }
         }
+        self.mailbox[square as usize] = None;
         self.update_occupancy();
     }
 
     /// Get the piece at a square
+    /// O(1) piece lookup using the mailbox array.
+    #[inline]
     pub fn piece_at(&self, square: u8) -> Option<Piece> {
-        let b = bit(square);
-        for ci in 0..2 {
-            for pi in 0..6 {
-                if self.bitboards[ci][pi] & b != 0 {
-                    let color = if ci == 0 { Color::White } else { Color::Black };
-                    return Some(Piece::new(piece_type_from_index(pi), color));
-                }
-            }
-        }
-        None
+        self.mailbox[square as usize]
     }
 
     /// Update combined occupancy bitboards
