@@ -288,13 +288,23 @@ fn sufficient_material_with_pawns() {
 }
 
 #[test]
-fn fifty_move_rule() {
+fn fifty_move_rule_is_claim_not_auto() {
     let mut game = GameState::from_fen(
         "8/8/3k4/8/8/3K4/8/3R4 w - - 99 1"
     ).unwrap();
-    // halfmove clock is 99, one more move without capture/pawn move → 100 → draw
+    // FIDE 9.3: 50-move is a claim, not automatic. Game stays Active at 100 half-moves.
     let result = game.make_move("d3e3").unwrap();
-    assert_eq!(result.status, GameStatus::Draw, "Should be draw by 50-move rule");
+    assert_eq!(result.status, GameStatus::Active, "50-move should be claimable, not auto-draw");
+}
+
+#[test]
+fn seventy_five_move_rule_auto_draw() {
+    let mut game = GameState::from_fen(
+        "8/8/3k4/8/8/3K4/8/3R4 w - - 149 1"
+    ).unwrap();
+    // FIDE 9.6.2: 75-move rule is automatic at 150 half-moves
+    let result = game.make_move("d3e3").unwrap();
+    assert_eq!(result.status, GameStatus::Draw, "Should be auto-draw at 75 moves");
 }
 
 // ═══════════════════════════════════════════════════════════════════════

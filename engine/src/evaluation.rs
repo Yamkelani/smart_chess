@@ -699,20 +699,32 @@ pub fn search_top_moves(
 
     let mut ctx = SearchContext::new(0);
 
-    // Use iterative deepening for each candidate so TT warms up
+    // Iterative deepening: warm TT across all depths
     let mut scored: Vec<(crate::moves::Move, i32)> = Vec::new();
-    for mv in &moves {
-        let mut new_board = board.clone();
-        if make_move(&mut new_board, mv) {
-            let score = -alpha_beta(
-                &new_board,
-                depth.saturating_sub(1),
-                i32::MIN + 1,
-                i32::MAX - 1,
-                &mut ctx,
-            );
-            scored.push((*mv, score));
+    for d in 1..=depth {
+        ctx.clear_killers();
+        let mut current_scored: Vec<(crate::moves::Move, i32)> = Vec::new();
+
+        // Order root moves using TT from previous iteration
+        let hash = hash_board(board);
+        let tt_move = tt_probe(&ctx, hash).and_then(|e| e.best_move);
+        let mut ordered = moves.clone();
+        order_moves(&mut ordered, board, tt_move, d as usize, &ctx);
+
+        for mv in &ordered {
+            let mut new_board = board.clone();
+            if make_move(&mut new_board, mv) {
+                let score = -alpha_beta(
+                    &new_board,
+                    d.saturating_sub(1),
+                    i32::MIN + 1,
+                    i32::MAX - 1,
+                    &mut ctx,
+                );
+                current_scored.push((*mv, score));
+            }
         }
+        scored = current_scored;
     }
 
     scored.sort_by(|a, b| b.1.cmp(&a.1));
@@ -733,7 +745,7 @@ pub fn search_top_moves(
 
 /// Extract the principal variation from the transposition table.
 fn extract_pv(board: &Board, max_depth: u8, pv: &mut Vec<crate::moves::Move>, ctx: &SearchContext) {
-    use crate::moves::make_move;
+    use crate::moves::{generate_legal_moves, make_move};
 
     if max_depth == 0 || pv.len() >= 10 {
         return;
@@ -741,6 +753,11 @@ fn extract_pv(board: &Board, max_depth: u8, pv: &mut Vec<crate::moves::Move>, ct
     let hash = hash_board(board);
     if let Some(entry) = tt_probe(ctx, hash) {
         if let Some(mv) = entry.best_move {
+            // Verify the TT move is legal in this position (guards against hash collisions)
+            let legal = generate_legal_moves(board);
+            if !legal.iter().any(|lm| lm.from == mv.from && lm.to == mv.to && lm.promotion == mv.promotion) {
+                return;
+            }
             pv.push(mv);
             let mut next = board.clone();
             if make_move(&mut next, &mv) {

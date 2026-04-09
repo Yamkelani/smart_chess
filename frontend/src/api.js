@@ -101,6 +101,22 @@ export class ChessAPI {
   }
 
   /**
+   * Set position on an existing game (for undo without creating a new game).
+   */
+  async setPosition(gameId, fen) {
+    if (isTauri()) {
+      return invoke('set_position', { gameId, fen });
+    }
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/set-position`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fen }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  /**
    * Request an AI move. Retries up to MAX_AI_RETRIES times with exponential backoff
    * before giving up and returning null (caller falls back to the Rust engine).
    *

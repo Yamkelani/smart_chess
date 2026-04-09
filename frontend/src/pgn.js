@@ -19,6 +19,7 @@ export function toPGN(options = {}) {
     event = '3D Chess Game',
     difficulty = 'intermediate',
     opening = null,
+    playerColor = 'white',
   } = options;
 
   const d = date ? new Date(date) : new Date();
@@ -63,22 +64,32 @@ export function toPGN(options = {}) {
     }
   }
   if (line) lines.push(line);
-  lines.push(_pgnResult(result));
+  lines.push(_pgnResult(result, playerColor));
 
   pgn += lines.join('\n');
   return pgn;
 }
 
-function _pgnResult(status) {
+function _pgnResult(status, playerColor) {
   if (!status) return '*';
   const s = status.toLowerCase();
   if (s.includes('checkmate')) {
-    // Determine from status string or default
-    return s.includes('white') ? '1-0' : s.includes('black') ? '0-1' : '1-0';
+    // Engine sends Checkmate("White") or Checkmate("Black") — winner name
+    if (s.includes('white')) return '1-0';
+    if (s.includes('black')) return '0-1';
+    // Fallback: if no colour embedded, use playerColor hint
+    return playerColor === 'black' ? '0-1' : '1-0';
+  }
+  if (s.includes('resign')) {
+    // "Black wins by resignation" etc.
+    if (s.includes('white')) return '1-0';
+    if (s.includes('black')) return '0-1';
   }
   if (s.includes('stalemate') || s.includes('draw')) return '1/2-1/2';
-  if (s === 'win' || s === '1-0') return '1-0';
-  if (s === 'loss' || s === '0-1') return '0-1';
+  // Relative results (from history): need playerColor to resolve
+  if (s === 'win')  return playerColor === 'black' ? '0-1' : '1-0';
+  if (s === 'loss') return playerColor === 'black' ? '1-0' : '0-1';
+  if (s === '1-0' || s === '0-1' || s === '1/2-1/2') return s;
   return '*';
 }
 

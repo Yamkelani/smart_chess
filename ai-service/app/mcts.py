@@ -50,8 +50,8 @@ class MCTSNode:
     @property
     def u_value(self) -> float:
         """Upper confidence bound U(s, a) = C_PUCT * P(s,a) * sqrt(N_parent) / (1 + N)."""
-        parent_visits = self.parent.visit_count if self.parent else 1
-        return MCTS_C_PUCT * self.prior * math.sqrt(parent_visits) / (1 + self.visit_count)
+        parent_visits = self.parent.visit_count if self.parent else 0
+        return MCTS_C_PUCT * self.prior * math.sqrt(max(1, parent_visits)) / (1 + self.visit_count)
 
     @property
     def ucb_score(self) -> float:
@@ -173,7 +173,7 @@ class MCTS:
                 policy = (1 - MCTS_DIRICHLET_EPSILON) * policy + MCTS_DIRICHLET_EPSILON * noise_full
 
         root.expand(board, policy)
-        root.visit_count = 1
+        # Root starts at 0 visits; UCB uses max(1, parent) to ensure exploration
 
         for _ in range(self.num_simulations):
             node = root

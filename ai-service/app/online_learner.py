@@ -309,13 +309,22 @@ class OnlineLearner:
                 total_value_loss += value_loss.item()
                 num_batches += 1
 
-            # Save updated model
+            # Only persist the model if loss improved (quality gate)
             self.model.eval()
-            self.manager.save_model()
-
-            elapsed = time.time() - start
             avg_policy = total_policy_loss / max(num_batches, 1)
             avg_value = total_value_loss / max(num_batches, 1)
+            new_total_loss = avg_policy + avg_value
+            prev_total_loss = (
+                (self.last_loss["policy"] + self.last_loss["value"])
+                if self.last_loss else float("inf")
+            )
+            if new_total_loss < prev_total_loss:
+                self.manager.save_model()
+                save_msg = "saved"
+            else:
+                save_msg = "skipped (loss did not improve)"
+
+            elapsed = time.time() - start
             self.last_loss = {"policy": avg_policy, "value": avg_value}
 
             # Record to monitoring system
@@ -329,9 +338,14 @@ class OnlineLearner:
                     epochs=ONLINE_LEARNING_EPOCHS,
                 )
 
-            print(f"[OnlineLearner] quick train: {ONLINE_LEARNING_EPOCHS} epochs, "
-                  f"batch={batch_size}, policy_loss={avg_policy:.4f}, "
-                  f"value_loss={avg_value:.4f}, time={elapsed:.2f}s")
+            import logging as _log
+            _logger = _log.getLogger("ai-service")
+            _logger.info(
+                "[OnlineLearner] quick train: %d epochs, batch=%d, "
+                "policy_loss=%.4f, value_loss=%.4f, model=%s, time=%.2fs",
+                ONLINE_LEARNING_EPOCHS, batch_size, avg_policy, avg_value,
+                save_msg, elapsed,
+            )
 
             return {
                 "trained": True,
@@ -339,11 +353,13 @@ class OnlineLearner:
                 "batch_size": batch_size,
                 "policy_loss": round(avg_policy, 4),
                 "value_loss": round(avg_value, 4),
+                "model_save": save_msg,
                 "duration_ms": round(elapsed * 1000),
             }
 
         except Exception as e:
-            print(f"[OnlineLearner] training error: {e}")
+            import logging as _log
+            _log.getLogger("ai-service").error("[OnlineLearner] training error: %s", e)
             return {"trained": False, "error": str(e)}
         finally:
             self.training_in_progress = False

@@ -28,6 +28,12 @@ const PIECE_UNICODE = {
   King: '♔', Queen: '♕', Rook: '♖', Bishop: '♗', Knight: '♘', Pawn: '♙',
 };
 
+// Standard piece values for material calculations
+const PIECE_VALUES = {
+  king: 0, queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1,
+  King: 0, Queen: 9, Rook: 5, Bishop: 3, Knight: 3, Pawn: 1,
+};
+
 class ChessGame {
   constructor() {
     this.api = new ChessAPI();
@@ -1561,7 +1567,7 @@ class ChessGame {
     }
 
     // Material check
-    const pieceValues = { queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1 };
+    const pieceValues = PIECE_VALUES;
     let playerMat = 0, oppMat = 0;
     for (const p of this.pieces) {
       const v = pieceValues[p.piece_type] || 0;
@@ -1664,11 +1670,21 @@ class ChessGame {
     }
 
     try {
-      // Create a new engine game at the target position, preserving the game_id
-      // for AI learning session continuity
-      const data = await this.api.newGame(targetFen);
-      const previousGameId = this.gameId;
-      this.gameId = data.game_id;
+      // Update the engine game's position in-place (preserving game_id
+      // for AI learning session continuity)
+      let data;
+      if (this.gameId) {
+        try {
+          data = await this.api.setPosition(this.gameId, targetFen);
+        } catch (_e) {
+          // Fallback: create new game if set-position not available
+          data = await this.api.newGame(targetFen);
+          this.gameId = data.game_id;
+        }
+      } else {
+        data = await this.api.newGame(targetFen);
+        this.gameId = data.game_id;
+      }
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -1988,6 +2004,7 @@ class ChessGame {
               date: game.date,
               white: game.playerColor === 'white' ? 'Player' : 'AI',
               black: game.playerColor === 'black' ? 'Player' : 'AI',
+              playerColor: game.playerColor || 'white',
             });
             copyPGN(pgn);
             e.target.textContent = '✓ Copied';
@@ -2009,6 +2026,7 @@ class ChessGame {
       opening: this._currentOpening ? this._currentOpening.name : null,
       white: this.playerColor === 'white' ? 'Player' : 'AI',
       black: this.playerColor === 'black' ? 'Player' : 'AI',
+      playerColor: this.playerColor,
     });
     downloadPGN(pgn, `chess_${new Date().toISOString().slice(0, 10)}.pgn`);
     sounds.playSelect();
@@ -2057,7 +2075,8 @@ class ChessGame {
       }
     } catch (e) {
       console.error('Review failed:', e);
-      this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review failed: ' + (e.message || 'Unknown error') + '</p>');
+      const errMsg = e.message || 'Unknown error';
+      this._showModal('Game Review', '<p style="color:var(--text-muted);text-align:center;">Review failed: ' + this._escapeHtml(errMsg) + '</p>');
     } finally {
       if (reviewBtn) { reviewBtn.disabled = false; reviewBtn.textContent = '📊 Review'; }
       if (overlayReviewBtn) { overlayReviewBtn.disabled = false; overlayReviewBtn.textContent = '📊 Review Game'; }
@@ -2659,8 +2678,9 @@ class ChessGame {
       this.useAI = false;
 
       // Track attempts
-      if (!this._drillProgress[drillId]) this._drillProgress[drillId] = { completed: false, attempts: 0 };
+      if (!this._drillProgress[drillId]) this._drillProgress[drillId] = { completed: false, attempts: 0, category: drill.category || '' };
       this._drillProgress[drillId].attempts++;
+      if (drill.category) this._drillProgress[drillId].category = drill.category;
       localStorage.setItem('chess_drill_progress', JSON.stringify(this._drillProgress));
 
       // Load the drill FEN
@@ -2754,8 +2774,9 @@ class ChessGame {
 
         if (result.completed) {
           // Mark as completed
-          if (!this._drillProgress[drillId]) this._drillProgress[drillId] = { completed: false, attempts: 1 };
+          if (!this._drillProgress[drillId]) this._drillProgress[drillId] = { completed: false, attempts: 1, category: this._currentDrill.category || '' };
           this._drillProgress[drillId].completed = true;
+          if (this._currentDrill.category) this._drillProgress[drillId].category = this._currentDrill.category;
           localStorage.setItem('chess_drill_progress', JSON.stringify(this._drillProgress));
 
           this._showPuzzleStatus('✅ Excellent! Tactic mastered!', 'correct');
@@ -2801,11 +2822,10 @@ class ChessGame {
     }
   }
 
-  _countDrillsDone(_categoryId) {
-    // Count completed drills from local progress cache.
-    // Full category filtering requires the drill list; total is fine for progress display.
+  _countDrillsDone(categoryId) {
+    // Count completed drills for a specific category from local progress cache.
     return Object.values(this._drillProgress)
-      .filter(p => p.completed)
+      .filter(p => p.completed && p.category === categoryId)
       .length;
   }
 
@@ -3000,11 +3020,17 @@ class ChessGame {
       if (newIdx < 0 || newIdx > this._importedMoves.length) return;
       this._importMoveIndex = newIdx;
 
-      // Load the FEN for this position
+      // Load the FEN for this position (use setPosition to avoid creating a new game each step)
       const fen = this._importedFens[newIdx];
       if (fen) {
-        const data = await this.api.newGame(fen);
-        this.gameId = data.game_id;
+        let data;
+        try {
+          data = await this.api.setPosition(this.gameId, fen);
+        } catch (_e) {
+          // Fallback: create new game if setPosition not available
+          data = await this.api.newGame(fen);
+          this.gameId = data.game_id;
+        }
         this.fen = data.fen;
         this.pieces = data.pieces;
         this.legalMoves = data.legal_moves;
@@ -3506,7 +3532,7 @@ class ChessGame {
   }
 
   _updateCaptured() {
-    const pieceValues = { king: 0, queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1, King: 0, Queen: 9, Rook: 5, Bishop: 3, Knight: 3, Pawn: 1 };
+    const pieceValues = PIECE_VALUES;
     const sort = (arr) => [...arr].sort((a, b) => (pieceValues[b] || 0) - (pieceValues[a] || 0));
 
     document.getElementById('captured-white').textContent =
@@ -3519,7 +3545,7 @@ class ChessGame {
   }
 
   _updatePlayerBars() {
-    const pieceValues = { king: 0, queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1, King: 0, Queen: 9, Rook: 5, Bishop: 3, Knight: 3, Pawn: 1 };
+    const pieceValues = PIECE_VALUES;
     const sort = (arr) => [...arr].sort((a, b) => (pieceValues[b] || 0) - (pieceValues[a] || 0));
 
     // Calculate material advantage
@@ -3587,7 +3613,7 @@ class ChessGame {
 
   _updateEvalBar() {
     // Simple material count from pieces
-    const pieceValues = { king: 0, queen: 9, rook: 5, bishop: 3, knight: 3, pawn: 1, King: 0, Queen: 9, Rook: 5, Bishop: 3, Knight: 3, Pawn: 1 };
+    const pieceValues = PIECE_VALUES;
     let whiteVal = 0, blackVal = 0;
     for (const p of this.pieces) {
       const v = pieceValues[p.piece_type] || 0;
@@ -3622,10 +3648,18 @@ class ChessGame {
   _offerDraw() {
     if (this.status !== 'Active' || this.moveHistory.length === 0) return;
     if (this.useAI) {
-      // AI always accepts draw when behind or equal (eval < 0.1 from player's perspective),
-      // declines when clearly winning. Simple heuristic based on move count & material.
+      // AI accepts draw based on material evaluation (from AI's perspective)
+      const aiColor = this.playerColor === 'white' ? 'black' : 'white';
+      let aiMat = 0, humanMat = 0;
+      for (const p of this.pieces) {
+        const v = PIECE_VALUES[p.piece_type] || 0;
+        if (p.color === aiColor) aiMat += v;
+        else humanMat += v;
+      }
+      const aiAdvantage = aiMat - humanMat;
       const moves = this.moveHistory.length;
-      const accept = moves >= 20 && Math.random() < 0.45; // AI accepts ~45% of draws after move 20
+      // Accept draw when behind or roughly equal (advantage <= 1), and past move 20
+      const accept = moves >= 20 && aiAdvantage <= 1;
       if (accept) {
         this._stopTimer();
         this.status = 'Draw by agreement';
@@ -4091,11 +4125,24 @@ class ChessGame {
     const emote = isEmote ? EMOTES.find(e => e.id === msg.content.emote) : null;
     const div = document.createElement('div');
     div.style.cssText = 'margin-bottom:4px;font-size:0.8rem';
-    div.innerHTML = isEmote
-      ? `<span style="color:var(--accent-cyan)">${msg.sender_name}</span> ${emote?.emoji || msg.content.emote}`
-      : `<span style="color:var(--accent-cyan)">${msg.sender_name}:</span> ${msg.content.text}`;
+    // Sanitise user-supplied text to prevent XSS
+    const safeName = this._escapeHtml(msg.sender_name || '');
+    if (isEmote) {
+      const safeEmote = emote?.emoji || this._escapeHtml(msg.content.emote || '');
+      div.innerHTML = `<span style="color:var(--accent-cyan)">${safeName}</span> ${safeEmote}`;
+    } else {
+      const safeText = this._escapeHtml(msg.content.text || '');
+      div.innerHTML = `<span style="color:var(--accent-cyan)">${safeName}:</span> ${safeText}`;
+    }
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+  }
+
+  /** Escape HTML entities to prevent XSS injection */
+  _escapeHtml(str) {
+    const el = document.createElement('span');
+    el.textContent = str;
+    return el.innerHTML;
   }
 
   _handleMultiplayerGameOver(data) {
@@ -4175,8 +4222,9 @@ class ChessGame {
     this._currentPuzzle = puzzle;
     this._puzzleMoveIndex = 0;
     this._puzzleMode = true;
-    this.newGame(puzzle.fen);
-    this._updateStatus(`📅 Daily Puzzle: ${puzzle.title}`);
+    this.newGame(puzzle.fen).then(() => {
+      this._updateStatus(`📅 Daily Puzzle: ${puzzle.title}`);
+    });
   }
 
   _checkDailyPuzzleMove(uci) {

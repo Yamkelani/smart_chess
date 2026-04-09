@@ -48,7 +48,7 @@ class SelfPlay:
         self.device = device
         self.num_simulations = num_simulations
 
-    def play_game(self, max_moves: int = 512) -> GameRecord:
+    def play_game(self, max_moves: int = 300) -> GameRecord:
         """
         Play a single self-play game.
 
@@ -200,7 +200,7 @@ class ReplayBuffer:
         if os.path.exists(path):
             try:
                 with open(path, 'rb') as f:
-                    data = pickle.load(f)
+                    data = pickle.load(f)  # nosec: trusted local training data only
                 self.buffer = data['buffer']
                 self.max_size = data.get('max_size', self.max_size)
                 print(f"Loaded replay buffer ({len(self.buffer)} examples) from {path}")

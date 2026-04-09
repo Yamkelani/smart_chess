@@ -53,6 +53,21 @@ fn evict_old_games(games: &mut HashMap<String, GameState>) {
     }
 }
 
+/// Look up a game in the in-memory map; if not found, try loading from disk
+/// and re-insert it into the map. Returns true if the game now exists.
+fn ensure_game_loaded(games: &mut HashMap<String, GameState>, game_id: &str) -> bool {
+    if games.contains_key(game_id) {
+        return true;
+    }
+    if let Some(game) = persistence::load_game(game_id) {
+        log::info!("Reloaded evicted game {} from disk", game_id);
+        games.insert(game_id.to_string(), game);
+        true
+    } else {
+        false
+    }
+}
+
 // ---- Request/Response types ----
 
 #[derive(Deserialize)]
@@ -255,12 +270,59 @@ pub async fn new_game(
     HttpResponse::Ok().json(response)
 }
 
+/// Set position on an existing game (for undo without creating a new game).
+#[derive(Deserialize)]
+pub struct SetPositionRequest {
+    pub fen: String,
+}
+
+pub async fn set_position(
+    data: web::Data<AppState>,
+    path: web::Path<String>,
+    body: web::Json<SetPositionRequest>,
+) -> impl Responder {
+    let game_id = path.into_inner();
+    let mut games = lock_games!(data);
+    ensure_game_loaded(&mut games, &game_id);
+    let game = match games.get_mut(&game_id) {
+        Some(g) => g,
+        None => return HttpResponse::NotFound().json(ErrorResponse {
+            error: "Game not found".to_string(),
+        }),
+    };
+    if let Err(e) = validate_fen(&body.fen) {
+        return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+    }
+    let new_board = match Board::from_fen(&body.fen) {
+        Ok(b) => b,
+        Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
+    };
+    game.board = new_board;
+    game.status = GameStatus::Active;
+    if let Err(e) = persistence::save_game(game) {
+        log::warn!("Could not persist game after set_position: {}", e);
+    }
+    HttpResponse::Ok().json(GameStateResponse {
+        game_id: game.id.clone(),
+        fen: game.board.to_fen(),
+        side_to_move: format!("{}", game.board.side_to_move),
+        pieces: game.board.to_piece_list(),
+        legal_moves: game.get_legal_moves(),
+        status: format!("{:?}", game.status),
+        move_history: game.move_history.clone(),
+        is_check: game.board.is_in_check(),
+    })
+}
+
 pub async fn get_game(
     data: web::Data<AppState>,
     path: web::Path<String>,
 ) -> impl Responder {
     let game_id = path.into_inner();
-    let games = lock_games!(data);
+    let mut games = lock_games!(data);
+
+    // Try disk if not in memory (may have been evicted)
+    ensure_game_loaded(&mut games, &game_id);
 
     match games.get(&game_id) {
         Some(game) => {
@@ -289,6 +351,8 @@ pub async fn make_move(
 ) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
+
+    ensure_game_loaded(&mut games, &game_id);
 
     match games.get_mut(&game_id) {
         Some(game) => {
@@ -323,7 +387,9 @@ pub async fn get_legal_moves(
     path: web::Path<String>,
 ) -> impl Responder {
     let game_id = path.into_inner();
-    let games = lock_games!(data);
+    let mut games = lock_games!(data);
+
+    ensure_game_loaded(&mut games, &game_id);
 
     match games.get(&game_id) {
         Some(game) => HttpResponse::Ok().json(game.get_legal_moves()),
@@ -365,6 +431,8 @@ pub async fn engine_move(
 ) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
+
+    ensure_game_loaded(&mut games, &game_id);
 
     match games.get_mut(&game_id) {
         Some(game) => {
@@ -539,6 +607,9 @@ pub async fn new_variant_game(
     };
 
     let game_id = game.id.clone();
+    if let Err(e) = persistence::save_game(&game) {
+        log::warn!("Could not persist variant game {}: {}", game.id, e);
+    }
     data.games.lock().map_err(|_| ()).ok().map(|mut g| {
         evict_old_games(&mut g);
         g.insert(game_id, game);
@@ -562,6 +633,7 @@ pub async fn resign_game(
 ) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
+    ensure_game_loaded(&mut games, &game_id);
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
         None => return HttpResponse::NotFound().json(ErrorResponse {
@@ -599,6 +671,7 @@ pub async fn draw_game(
 ) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
+    ensure_game_loaded(&mut games, &game_id);
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
         None => return HttpResponse::NotFound().json(ErrorResponse {
@@ -633,6 +706,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/game/{id}", web::get().to(get_game))
         .route("/game/{id}/move", web::post().to(make_move))
         .route("/game/{id}/moves", web::get().to(get_legal_moves))
+        .route("/game/{id}/set-position", web::post().to(set_position))
         .route("/game/{id}/engine-move", web::post().to(engine_move))
         .route("/game/{id}/resign", web::post().to(resign_game))
         .route("/game/{id}/draw", web::post().to(draw_game))
