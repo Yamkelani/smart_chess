@@ -683,88 +683,92 @@ pub fn search_best_move_timed(board: &Board, depth: u8, time_limit_ms: u64) -> O
     Some((best_move, best_score))
 }
 
-/// Multi-PV search: return the top N moves with their evaluations and
-/// principal variations.
-pub fn search_top_moves(
+/// Multi-PV search: return the top N moves with their evaluations and principal variations.
+/// Search a position with alpha-beta while also returning the principal variation.
+fn alpha_beta_with_pv(
     board: &Board,
     depth: u8,
-    num_moves: usize,
-) -> Vec<(crate::moves::Move, i32, Vec<crate::moves::Move>)> {
-    use crate::moves::{generate_legal_moves, make_move};
+    mut alpha: i32,
+    beta: i32,
+    max_pv_len: usize,
+) -> (i32, Vec<crate::moves::Move>) {
+    use crate::moves::{generate_legal_moves, make_move, Move};
+
+    if depth == 0 || max_pv_len == 0 {
+        return (evaluate_position(board), Vec::new());
+    }
+
+    let moves = generate_legal_moves(board);
+    if moves.is_empty() {
+        return (evaluate_position(board), Vec::new());
+    }
+
+    let mut best_score = i32::MIN + 1;
+    let mut best_pv: Vec<Move> = Vec::new();
+
+    for mv in &moves {
+        let mut new_board = board.clone();
+        if make_move(&mut new_board, mv) {
+            let (child_score, child_pv) = alpha_beta_with_pv(
+                &new_board,
+                depth.saturating_sub(1),
+                -beta,
+                -alpha,
+                max_pv_len.saturating_sub(1),
+            );
+            let score = -child_score;
+
+            if score > best_score {
+                best_score = score;
+                best_pv.clear();
+                best_pv.push(*mv);
+                best_pv.extend(child_pv);
+            }
+
+            if score > alpha {
+                alpha = score;
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+    }
+
+    (best_score, best_pv)
+}
+
+/// Each result is (move, score, pv) where pv is a Vec<Move> showing the expected continuation.
+pub fn search_top_moves(board: &Board, depth: u8, num_moves: usize) -> Vec<(crate::moves::Move, i32, Vec<crate::moves::Move>)> {
+    use crate::moves::{generate_legal_moves, make_move, Move};
 
     let moves = generate_legal_moves(board);
     if moves.is_empty() {
         return vec![];
     }
 
-    let mut ctx = SearchContext::new(0);
-
-    // Iterative deepening: warm TT across all depths
-    let mut scored: Vec<(crate::moves::Move, i32)> = Vec::new();
-    for d in 1..=depth {
-        ctx.clear_killers();
-        let mut current_scored: Vec<(crate::moves::Move, i32)> = Vec::new();
-
-        // Order root moves using TT from previous iteration
-        let hash = hash_board(board);
-        let tt_move = tt_probe(&ctx, hash).and_then(|e| e.best_move);
-        let mut ordered = moves.clone();
-        order_moves(&mut ordered, board, tt_move, d as usize, &ctx);
-
-        for mv in &ordered {
-            let mut new_board = board.clone();
-            if make_move(&mut new_board, mv) {
-                let score = -alpha_beta(
-                    &new_board,
-                    d.saturating_sub(1),
-                    i32::MIN + 1,
-                    i32::MAX - 1,
-                    &mut ctx,
-                );
-                current_scored.push((*mv, score));
-            }
+    // Score every legal move and capture its principal variation in the same search.
+    let mut scored: Vec<(Move, i32, Vec<Move>)> = Vec::new();
+    for mv in &moves {
+        let mut new_board = board.clone();
+        if make_move(&mut new_board, mv) {
+            let (child_score, child_pv) = alpha_beta_with_pv(
+                &new_board,
+                depth.saturating_sub(1),
+                i32::MIN + 1,
+                i32::MAX - 1,
+                7,
+            );
+            let score = -child_score;
+            let mut pv = vec![*mv];
+            pv.extend(child_pv);
+            scored.push((*mv, score, pv));
         }
-        scored = current_scored;
     }
 
+    // Sort descending by score
     scored.sort_by(|a, b| b.1.cmp(&a.1));
     scored.truncate(num_moves);
-
     scored
-        .into_iter()
-        .map(|(mv, score)| {
-            let mut pv = vec![mv];
-            let mut pv_board = board.clone();
-            if make_move(&mut pv_board, &mv) {
-                extract_pv(&pv_board, depth.saturating_sub(1), &mut pv, &ctx);
-            }
-            (mv, score, pv)
-        })
-        .collect()
-}
-
-/// Extract the principal variation from the transposition table.
-fn extract_pv(board: &Board, max_depth: u8, pv: &mut Vec<crate::moves::Move>, ctx: &SearchContext) {
-    use crate::moves::{generate_legal_moves, make_move};
-
-    if max_depth == 0 || pv.len() >= 10 {
-        return;
-    }
-    let hash = hash_board(board);
-    if let Some(entry) = tt_probe(ctx, hash) {
-        if let Some(mv) = entry.best_move {
-            // Verify the TT move is legal in this position (guards against hash collisions)
-            let legal = generate_legal_moves(board);
-            if !legal.iter().any(|lm| lm.from == mv.from && lm.to == mv.to && lm.promotion == mv.promotion) {
-                return;
-            }
-            pv.push(mv);
-            let mut next = board.clone();
-            if make_move(&mut next, &mv) {
-                extract_pv(&next, max_depth - 1, pv, ctx);
-            }
-        }
-    }
 }
 
 
