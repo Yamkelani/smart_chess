@@ -92,6 +92,15 @@ const HIGHLIGHT_LAST_MOVE  = 0xffd700;
 const HIGHLIGHT_CHECK       = 0xff2244;
 const HIGHLIGHT_HINT        = 0x00e5ff;
 
+// Analysis arrow colors ranked by move quality (best → worst)
+const ANALYSIS_COLORS = [
+  0x00ff88, // #1 — green (best)
+  0x66ccff, // #2 — blue
+  0xffdd44, // #3 — gold
+  0xff9944, // #4 — orange
+  0xff5566, // #5 — red-pink
+];
+
 export class ChessBoard3D {
   constructor(canvas) {
     this.canvas = canvas;
@@ -1051,6 +1060,16 @@ export class ChessBoard3D {
         ring.material.opacity = 0.3 + Math.sin(t * 3 + ring.userData.phase) * 0.15;
       }
 
+      // Animate hanging-piece rings in attack map
+      if (this._attackMapMeshes) {
+        for (const mesh of this._attackMapMeshes) {
+          if (mesh.userData.isAttackMapRing) {
+            mesh.material.opacity = 0.55 + Math.sin(t * 4 + mesh.userData.phase) * 0.3;
+            mesh.rotation.z += dt * 1.2;
+          }
+        }
+      }
+
       // Update particles
       this._updateParticles(dt);
 
@@ -1360,6 +1379,275 @@ export class ChessBoard3D {
     // Particles on both squares
     this._spawnParticles(from3D.x, from3D.z, HIGHLIGHT_HINT, 10);
     this._spawnParticles(to3D.x, to3D.z, HIGHLIGHT_HINT, 12);
+  }
+
+  // ---- Analysis / Best Moves Visualization ----
+
+  /**
+   * Show ranked arrows for the top N analysis moves.
+   * @param {Array<{from: string, to: string, rank: number}>} moves
+   *   rank is 0-based (0 = best move)
+   * @param {number|null} [highlightRank=null] — if set, emphasise this rank
+   */
+  showAnalysisArrows(moves, highlightRank = null) {
+    this.clearAnalysis();
+    this._analysisMeshes = [];
+
+    for (const { from: fromSq, to: toSq, rank } of moves) {
+      const color = ANALYSIS_COLORS[Math.min(rank, ANALYSIS_COLORS.length - 1)];
+      const isHighlighted = highlightRank === rank;
+      const baseOpacity = isHighlighted ? 0.85 : Math.max(0.2, 0.7 - rank * 0.12);
+      const width = isHighlighted ? 0.10 : Math.max(0.04, 0.08 - rank * 0.01);
+
+      const fromPos = this._fromAlgebraic(fromSq);
+      const toPos   = this._fromAlgebraic(toSq);
+      const from3D  = this._squareToWorld(fromPos.file, fromPos.rank);
+      const to3D    = this._squareToWorld(toPos.file, toPos.rank);
+
+      const dx = to3D.x - from3D.x;
+      const dz = to3D.z - from3D.z;
+      const length = Math.sqrt(dx * dx + dz * dz);
+      const angle  = Math.atan2(dx, dz);
+      const yOff   = 0.055 + rank * 0.003; // slight vertical stacking
+
+      // Arrow shaft
+      const shaftLen = Math.max(0.1, length - 0.35);
+      const shaftGeo = new THREE.PlaneGeometry(width, shaftLen);
+      const shaftMat = new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: baseOpacity,
+        depthTest: false, side: THREE.DoubleSide,
+      });
+      const shaft = new THREE.Mesh(shaftGeo, shaftMat);
+      shaft.rotation.x = -Math.PI / 2;
+      shaft.rotation.z = -angle;
+      shaft.position.set(from3D.x + dx * 0.4, yOff, from3D.z + dz * 0.4);
+      this.scene.add(shaft);
+      this._analysisMeshes.push(shaft);
+
+      // Arrow head
+      const headGeo = new THREE.BufferGeometry();
+      const s = isHighlighted ? 0.16 : 0.12;
+      const verts = new Float32Array([
+        0, 0,  s * 1.5,
+       -s, 0, -s * 0.5,
+        s, 0, -s * 0.5,
+      ]);
+      headGeo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+      headGeo.computeVertexNormals();
+      const headMat = new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: Math.min(1, baseOpacity + 0.1),
+        depthTest: false, side: THREE.DoubleSide,
+      });
+      const head = new THREE.Mesh(headGeo, headMat);
+      head.rotation.y = angle;
+      head.position.set(
+        to3D.x - dx / length * 0.22,
+        yOff,
+        to3D.z - dz / length * 0.22
+      );
+      this.scene.add(head);
+      this._analysisMeshes.push(head);
+
+      // Rank label (small floating number)
+      if (rank < 3) {
+        this._spawnParticles(from3D.x, from3D.z, color, 4 - rank);
+      }
+    }
+  }
+
+  /**
+   * Clear all analysis arrows.
+   */
+  clearAnalysis() {
+    if (this._analysisMeshes) {
+      for (const mesh of this._analysisMeshes) {
+        this.scene.remove(mesh);
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) mesh.material.dispose();
+      }
+      this._analysisMeshes = [];
+    }
+    this._clearPreview();
+  }
+
+  // ---- Attack & Defense Overlay ----
+
+  /**
+   * Render the attack / defense heatmap from the engine's attack-map response.
+   *
+   * Color coding (semi-transparent square overlays):
+   *   White-only control  → blue   (0x3388ff)
+   *   Black-only control  → red    (0xff3344)
+   *   Contested           → purple (0xaa44ff)
+   *   Hanging piece       → bright pulsing red/blue ring
+   *
+   * A small floating count badge (white_count / black_count) is rendered for
+   * contested squares to show the relative attacker tally.
+   *
+   * @param {object} data - Response from /attack-map or get_attack_map
+   * @param {string} [playerColor='white'] - Which side the local player is
+   */
+  showAttackMap(data) {
+    this.clearAttackMap();
+    this._attackMapMeshes = [];
+
+    const COLORS = {
+      white:     0x3388ff,  // blue  — white territory
+      black:     0xff3344,  // red   — black territory
+      contested: 0xaa44ff,  // purple
+    };
+
+    for (const sq of data.squares) {
+      if (sq.control === 'neutral') continue;
+
+      const { file, rank } = this._fromAlgebraic(sq.square);
+      const pos = this._squareToWorld(file, rank);
+      const color = COLORS[sq.control];
+
+      // Base fill
+      const fillGeo = new THREE.PlaneGeometry(SQUARE_SIZE * 0.86, SQUARE_SIZE * 0.86);
+      const fillMat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: sq.control === 'contested' ? 0.28 : 0.22,
+        depthTest: false,
+      });
+      const fill = new THREE.Mesh(fillGeo, fillMat);
+      fill.rotation.x = -Math.PI / 2;
+      fill.position.set(pos.x, 0.043, pos.z);
+      this.scene.add(fill);
+      this._attackMapMeshes.push(fill);
+
+      // For contested squares show attacker counts as two small dots
+      if (sq.control === 'contested') {
+        this._addAttackCountDots(pos, sq.white_count, sq.black_count);
+      }
+    }
+
+    // Hanging piece rings
+    for (const hp of data.hanging_pieces) {
+      const { file, rank } = this._fromAlgebraic(hp.square);
+      const pos = this._squareToWorld(file, rank);
+      const ringColor = hp.color === 'white' ? 0xff6600 : 0x00aaff;
+
+      const ringGeo = new THREE.RingGeometry(0.38, 0.47, 32);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: ringColor,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        depthTest: false,
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(pos.x, 0.052, pos.z);
+      ring.userData.isAttackMapRing = true;
+      ring.userData.phase = Math.random() * Math.PI * 2;
+      this.scene.add(ring);
+      this._attackMapMeshes.push(ring);
+    }
+
+    this._attackMapActive = true;
+    this._attackMapData = data;
+  }
+
+  /** Add two small circle dots showing white vs black attacker counts on a contested square. */
+  _addAttackCountDots(pos, wCount, bCount) {
+    const dotRadius = 0.09;
+    const yOff = 0.046;
+
+    // White attackers dot (left)
+    if (wCount > 0) {
+      const geo = new THREE.CircleGeometry(dotRadius * Math.min(wCount, 4) * 0.5 + dotRadius, 12);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x88bbff, transparent: true, opacity: 0.8, depthTest: false });
+      const dot = new THREE.Mesh(geo, mat);
+      dot.rotation.x = -Math.PI / 2;
+      dot.position.set(pos.x - 0.22, yOff, pos.z);
+      this.scene.add(dot);
+      this._attackMapMeshes.push(dot);
+    }
+
+    // Black attackers dot (right)
+    if (bCount > 0) {
+      const geo = new THREE.CircleGeometry(dotRadius * Math.min(bCount, 4) * 0.5 + dotRadius, 12);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xff8888, transparent: true, opacity: 0.8, depthTest: false });
+      const dot = new THREE.Mesh(geo, mat);
+      dot.rotation.x = -Math.PI / 2;
+      dot.position.set(pos.x + 0.22, yOff, pos.z);
+      this.scene.add(dot);
+      this._attackMapMeshes.push(dot);
+    }
+  }
+
+  /** Remove all attack map overlays from the scene. */
+  clearAttackMap() {
+    if (this._attackMapMeshes) {
+      for (const mesh of this._attackMapMeshes) {
+        this.scene.remove(mesh);
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) mesh.material.dispose();
+      }
+    }
+    this._attackMapMeshes = [];
+    this._attackMapActive = false;
+    this._attackMapData = null;
+  }
+
+  /**
+   * Preview a future position by temporarily showing ghost pieces,
+   * called when hovering over an analysis move.
+   * @param {Array<{square: string, piece_type: string, color: string}>} pieces
+   */
+  previewPosition(pieces) {
+    this._clearPreview();
+    this._previewMeshes = [];
+
+    for (const p of pieces) {
+      const sq = p.square;
+      const typeLetter =
+        p.piece_type === 'pawn' ? 'P' :
+        p.piece_type === 'knight' ? 'N' :
+        p.piece_type === 'bishop' ? 'B' :
+        p.piece_type === 'rook' ? 'R' :
+        p.piece_type === 'queen' ? 'Q' :
+        p.piece_type === 'king' ? 'K' : 'P';
+      const isWhite = p.color === 'white' || p.color === 'White';
+
+      const { file, rank } = this._fromAlgebraic(sq);
+      const worldPos = this._squareToWorld(file, rank);
+      const mesh = createPieceMesh(typeLetter, isWhite, 0.9);
+      if (!mesh) continue;
+
+      // Make ghost-like
+      mesh.traverse((child) => {
+        if (child.isMesh && child.material) {
+          child.material = child.material.clone();
+          child.material.transparent = true;
+          child.material.opacity = 0.45;
+        }
+      });
+
+      mesh.position.set(worldPos.x, 0.04, worldPos.z);
+      this.scene.add(mesh);
+      this._previewMeshes.push(mesh);
+    }
+
+    // Hide real pieces while preview is active
+    this.pieceMeshes.forEach(mesh => { mesh.visible = false; });
+  }
+
+  /**
+   * Clear the ghost piece preview and restore normal pieces.
+   */
+  _clearPreview() {
+    if (this._previewMeshes) {
+      for (const mesh of this._previewMeshes) {
+        this.scene.remove(mesh);
+      }
+      this._previewMeshes = [];
+    }
+    // Restore real pieces
+    this.pieceMeshes.forEach(mesh => { mesh.visible = true; });
   }
 
   // ---- Click detection ----

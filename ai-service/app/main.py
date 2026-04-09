@@ -23,7 +23,7 @@ from typing import Optional, List, Dict
 
 from app.config import (
     AI_SERVICE_HOST, AI_SERVICE_PORT, ENGINE_URL,
-    DIFFICULTY_LEVELS, MCTS_SIMULATIONS, MCTS_TEMPERATURE
+    DIFFICULTY_LEVELS, MCTS_SIMULATIONS, MCTS_TEMPERATURE, MAX_MCTS_SIMULATIONS
 )
 from app.model import ChessNetManager
 from app.mcts import MCTS
@@ -141,9 +141,11 @@ app.add_middleware(
 
 # ---- Helper Functions ----
 
-def get_simulations(difficulty: str) -> int:
-    """Get MCTS simulation count for a difficulty level."""
-    return DIFFICULTY_LEVELS.get(difficulty, DIFFICULTY_LEVELS["intermediate"])
+def get_simulations(difficulty: str, requested: int | None = None) -> int:
+    """Get MCTS simulation count for a difficulty level, capped at MAX_MCTS_SIMULATIONS."""
+    base = DIFFICULTY_LEVELS.get(difficulty, DIFFICULTY_LEVELS["intermediate"])
+    count = requested if requested is not None else base
+    return min(count, MAX_MCTS_SIMULATIONS)
 
 
 def run_mcts(fen: str, num_simulations: int,
@@ -287,7 +289,7 @@ async def ai_evaluate(req: EvalRequest):
     """Evaluate a position using the neural network + MCTS."""
     try:
         board = chess.Board(req.fen)
-        sims = req.num_simulations or 200
+        sims = min(req.num_simulations or 200, MAX_MCTS_SIMULATIONS)
 
         mcts = MCTS(
             manager.get_model(), manager.device,
@@ -708,6 +710,112 @@ async def list_personalities():
             {"id": k, **{kk: vv for kk, vv in v.items() if kk != "style_bias"}}
             for k, v in AI_PERSONALITIES.items()
         ]
+    }
+
+
+# ═══════════════════════════════════════════════════
+# PGN IMPORT ENDPOINT
+# ═══════════════════════════════════════════════════
+
+class PGNImportRequest(BaseModel):
+    pgn: str
+
+@app.post("/ai/pgn/import")
+async def pgn_import(req: PGNImportRequest):
+    """
+    Parse a PGN string and return headers, UCI moves, and FENs for each position.
+    Uses python-chess for accurate parsing and SAN→UCI conversion.
+    """
+    try:
+        import io
+        import chess.pgn
+
+        pgn_io = io.StringIO(req.pgn.strip())
+        game = chess.pgn.read_game(pgn_io)
+        if game is None:
+            raise HTTPException(status_code=400, detail="Could not parse PGN")
+
+        headers = dict(game.headers)
+
+        # Walk the mainline collecting moves + FENs
+        uci_moves = []
+        fens = []
+        board = game.board()
+        fens.append(board.fen())
+
+        for move in game.mainline_moves():
+            uci_moves.append(move.uci())
+            board.push(move)
+            fens.append(board.fen())
+
+        return {
+            "headers": headers,
+            "uci_moves": uci_moves,
+            "fens": fens,
+            "move_count": len(uci_moves),
+            "starting_fen": fens[0] if fens else None,
+            "final_fen": fens[-1] if fens else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"PGN parse error: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════
+# PRACTICE / DRILL ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+class DrillMoveRequest(BaseModel):
+    drill_id: str
+    move_index: int
+    move: str  # UCI format
+
+@app.get("/ai/drills/categories")
+async def drill_categories():
+    """Return all practice drill categories with counts."""
+    from app.drills import get_categories
+    return {"categories": get_categories()}
+
+@app.get("/ai/drills/category/{category_id}")
+async def drills_by_category(category_id: str):
+    """Return all drills in a category (no solutions sent to client)."""
+    from app.drills import get_drills_by_category
+    drills = get_drills_by_category(category_id)
+    if not drills:
+        raise HTTPException(status_code=404, detail="Category not found or has no drills")
+    return {"drills": drills}
+
+@app.get("/ai/drills/{drill_id}")
+async def get_drill(drill_id: str):
+    """Return a specific drill without the solution."""
+    from app.drills import get_drill_by_id
+    drill = get_drill_by_id(drill_id)
+    if not drill:
+        raise HTTPException(status_code=404, detail="Drill not found")
+    return {k: v for k, v in drill.items() if k != "solution"}
+
+@app.get("/ai/drills/{drill_id}/hint")
+async def drill_hint(drill_id: str):
+    """Return the hint for a drill."""
+    from app.drills import get_drill_hint
+    hint = get_drill_hint(drill_id)
+    if hint is None:
+        raise HTTPException(status_code=404, detail="Drill not found")
+    return {"hint": hint}
+
+@app.post("/ai/drills/check")
+async def check_drill_move(req: DrillMoveRequest):
+    """Check if a drill move is correct and return feedback."""
+    from app.drills import check_drill_move as _check
+    correct, is_complete, next_move, explanation = _check(
+        req.drill_id, req.move_index, req.move
+    )
+    return {
+        "correct": correct,
+        "completed": is_complete,
+        "next_move": next_move,
+        "explanation": explanation,
     }
 
 

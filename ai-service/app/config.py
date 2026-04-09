@@ -47,6 +47,9 @@ TRAINING_DATA_DIR = os.getenv("TRAINING_DATA_DIR", "./training_data")
 # Database
 DB_PATH = os.getenv("DB_PATH", "./data/chess_ai.db")
 
+# Hard cap on MCTS simulations per request — prevents DoS from malicious clients.
+MAX_MCTS_SIMULATIONS = int(os.getenv("MAX_MCTS_SIMULATIONS", "5000"))
+
 # Difficulty levels (MCTS simulations per level)
 DIFFICULTY_LEVELS = {
     "beginner": 50,

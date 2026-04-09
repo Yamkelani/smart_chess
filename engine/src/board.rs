@@ -92,7 +92,7 @@ pub fn square_from_name(name: &str) -> Option<u8> {
     }
 }
 
-fn piece_type_index(pt: PieceType) -> usize {
+pub fn piece_type_index(pt: PieceType) -> usize {
     match pt {
         PieceType::King => 0,
         PieceType::Queen => 1,
@@ -115,7 +115,7 @@ fn piece_type_from_index(idx: usize) -> PieceType {
     }
 }
 
-fn color_index(c: Color) -> usize {
+pub fn color_index(c: Color) -> usize {
     match c {
         Color::White => 0,
         Color::Black => 1,
