@@ -438,9 +438,16 @@ class ChessGame {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
+  _escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
   _formatMarkdown(text) {
-    // Convert basic markdown to HTML: bold, bullet lists, newlines
-    return text
+    // Escape HTML first to prevent XSS, then apply safe markdown formatting
+    const escaped = this._escapeHtml(text);
+    return escaped
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
       .replace(/`(.*?)`/g, '<code>$1</code>')
@@ -513,7 +520,7 @@ class ChessGame {
         if (coachEl) {
           const tip = document.createElement('div');
           tip.className = 'tutor-tip';
-          tip.innerHTML = `<span class="tutor-tag" style="background:rgba(0,229,255,0.15);color:#00e5ff;">💡 HINT</span> ${hintText}`;
+          tip.innerHTML = `<span class="tutor-tag" style="background:rgba(0,229,255,0.15);color:#00e5ff;">💡 HINT</span> ${this._escapeHtml(hintText)}`;
           coachEl.appendChild(tip);
           coachEl.scrollTop = coachEl.scrollHeight;
         }
@@ -779,7 +786,7 @@ class ChessGame {
 
       const tip = document.createElement('div');
       tip.className = 'tutor-tip';
-      tip.innerHTML = `<span class="tutor-tag" style="background:rgba(0,255,136,0.15);color:#00ff88;">🔬 SIM</span> ${desc}`;
+      tip.innerHTML = `<span class="tutor-tag" style="background:rgba(0,255,136,0.15);color:#00ff88;">🔬 SIM</span> ${this._escapeHtml(desc)}`;
       coachEl.appendChild(tip);
       coachEl.scrollTop = coachEl.scrollHeight;
     }

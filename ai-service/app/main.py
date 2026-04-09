@@ -11,13 +11,16 @@ game played, recording positions and training after each game completes.
 
 import os
 import asyncio
+import time
 import httpx
 import chess
 import numpy as np
 import torch
+from collections import defaultdict
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 
@@ -144,11 +147,31 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(","),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+# ---- Simple in-memory rate limiter ----
+_rate_buckets: Dict[str, list] = defaultdict(list)
+_RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "120"))  # requests per minute per IP
+_RATE_WINDOW = 60.0  # seconds
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    bucket = _rate_buckets[client_ip]
+    # Prune old entries
+    _rate_buckets[client_ip] = [t for t in bucket if now - t < _RATE_WINDOW]
+    if len(_rate_buckets[client_ip]) >= _RATE_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Try again later."},
+        )
+    _rate_buckets[client_ip].append(now)
+    return await call_next(request)
 
 
 # ---- Helper Functions ----
@@ -334,7 +357,7 @@ async def ai_move(req: AIMoveRequest):
         # so the AI always feels appropriately imprecise
         if req.difficulty in ("beginner", "intermediate"):
             temp = max(temp, profile["temperature"])
-        result = run_mcts(req.fen, num_simulations=sims, temperature=temp)
+        result = await asyncio.to_thread(run_mcts, req.fen, sims, temp)
 
         # Apply difficulty-based blunder / miss-tactics filtering
         result = apply_difficulty_filter(result, req.difficulty, req.fen)
@@ -380,11 +403,14 @@ async def ai_evaluate(req: EvalRequest):
         board = chess.Board(req.fen)
         sims = min(req.num_simulations or 200, MAX_MCTS_SIMULATIONS)
 
-        mcts = MCTS(
-            manager.get_model(), manager.device,
-            num_simulations=sims, add_noise=False
-        )
-        action_probs = mcts.get_action_probs(board, temperature=0.01)
+        def _eval_mcts():
+            m = MCTS(
+                manager.get_model(), manager.device,
+                num_simulations=sims, add_noise=False
+            )
+            return m.get_action_probs(board, temperature=0.01)
+
+        action_probs = await asyncio.to_thread(_eval_mcts)
 
         from app.chess_env import board_to_tensor
         tensor = board_to_tensor(board)
@@ -423,7 +449,7 @@ async def start_game(req: GamePlayRequest):
         # If player chose black, AI plays white first
         if req.player_color == "black":
             sims = get_simulations(req.difficulty)
-            result = run_mcts(engine_data["fen"], num_simulations=sims, temperature=0.5)
+            result = await asyncio.to_thread(run_mcts, engine_data["fen"], sims, 0.5)
             move_data = await engine_make_move(game_id, result["move"])
             ai_move_uci = result["move"]
 
@@ -491,7 +517,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
 
         # AI responds
         sims = get_simulations(req.difficulty)
-        result = run_mcts(game_data["fen"], num_simulations=sims, temperature=0.1)
+        result = await asyncio.to_thread(run_mcts, game_data["fen"], sims, 0.1)
 
         # Record the AI's position + MCTS policy for learning
         if online_learner:

@@ -14,6 +14,7 @@ pub mod attacks;
 mod chess960;
 mod variants;
 mod multiplayer;
+mod zobrist;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

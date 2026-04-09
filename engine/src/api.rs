@@ -12,8 +12,45 @@ use crate::persistence;
 use crate::chess960;
 use crate::variants;
 
+/// Maximum number of games to keep in memory.  When exceeded, the oldest
+/// (by insertion/access order) are evicted.  Set via MAX_GAMES env var.
+const MAX_GAMES: usize = 500;
+
 pub struct AppState {
     pub games: Mutex<HashMap<String, GameState>>,
+}
+
+/// Acquire the games lock, returning an HTTP 500 if the mutex is poisoned.
+macro_rules! lock_games {
+    ($data:expr) => {
+        match $data.games.lock() {
+            Ok(guard) => guard,
+            Err(_) => return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "Internal lock error".to_string(),
+            }),
+        }
+    };
+}
+
+/// Evict oldest games if the map exceeds MAX_GAMES.
+fn evict_old_games(games: &mut HashMap<String, GameState>) {
+    if games.len() <= MAX_GAMES {
+        return;
+    }
+    // Remove games that are finished first, then oldest by fullmove_number
+    let mut ids: Vec<(String, bool, u32)> = games.iter().map(|(id, g)| {
+        let is_active = g.status == crate::game::GameStatus::Active;
+        (id.clone(), is_active, g.board.fullmove_number)
+    }).collect();
+    // Sort: finished first, then by lowest move number (oldest)
+    ids.sort_by(|a, b| {
+        a.1.cmp(&b.1).then(a.2.cmp(&b.2))
+    });
+    let to_remove = games.len() - MAX_GAMES;
+    for (id, _, _) in ids.into_iter().take(to_remove) {
+        games.remove(&id);
+        log::info!("Evicted old game {}", id);
+    }
 }
 
 // ---- Request/Response types ----
@@ -210,7 +247,10 @@ pub async fn new_game(
     if let Err(e) = persistence::save_game(&game) {
         log::warn!("Could not persist new game {}: {}", game.id, e);
     }
-    data.games.lock().unwrap().insert(game_id, game);
+    data.games.lock().map_err(|_| ()).ok().map(|mut g| {
+        evict_old_games(&mut g);
+        g.insert(game_id, game);
+    });
 
     HttpResponse::Ok().json(response)
 }
@@ -220,7 +260,7 @@ pub async fn get_game(
     path: web::Path<String>,
 ) -> impl Responder {
     let game_id = path.into_inner();
-    let games = data.games.lock().unwrap();
+    let games = lock_games!(data);
 
     match games.get(&game_id) {
         Some(game) => {
@@ -248,7 +288,7 @@ pub async fn make_move(
     body: web::Json<MakeMoveRequest>,
 ) -> impl Responder {
     let game_id = path.into_inner();
-    let mut games = data.games.lock().unwrap();
+    let mut games = lock_games!(data);
 
     match games.get_mut(&game_id) {
         Some(game) => {
@@ -283,7 +323,7 @@ pub async fn get_legal_moves(
     path: web::Path<String>,
 ) -> impl Responder {
     let game_id = path.into_inner();
-    let games = data.games.lock().unwrap();
+    let games = lock_games!(data);
 
     match games.get(&game_id) {
         Some(game) => HttpResponse::Ok().json(game.get_legal_moves()),
@@ -324,7 +364,7 @@ pub async fn engine_move(
     query: web::Query<EngineMoveQuery>,
 ) -> impl Responder {
     let game_id = path.into_inner();
-    let mut games = data.games.lock().unwrap();
+    let mut games = lock_games!(data);
 
     match games.get_mut(&game_id) {
         Some(game) => {
@@ -499,7 +539,10 @@ pub async fn new_variant_game(
     };
 
     let game_id = game.id.clone();
-    data.games.lock().unwrap().insert(game_id, game);
+    data.games.lock().map_err(|_| ()).ok().map(|mut g| {
+        evict_old_games(&mut g);
+        g.insert(game_id, game);
+    });
 
     HttpResponse::Ok().json(response)
 }

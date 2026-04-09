@@ -203,12 +203,19 @@ class ModelMonitor:
         result_lower = result.lower()
 
         if "checkmate" in result_lower or "resign" in result_lower:
-            # Need to figure out who won — the result string from the engine
-            # says "Checkmate" for the side that got mated (can't move).
-            # If the engine returns Checkmate after an AI move, the human got mated → AI wins
-            # We accept explicit winner from the learning endpoint, so we infer here:
-            # Convention: the last player to move WON if Checkmate
-            ai_outcome = "win"  # Will be corrected by record_game_with_winner
+            # Parse winner from the status string.
+            # The engine returns statuses like "Checkmate(white)" where the
+            # value in parentheses is the *winner's* color.
+            winner = self._extract_winner(result)
+            if winner == ai_color:
+                ai_outcome = "win"
+            elif winner is not None:
+                ai_outcome = "loss"
+            else:
+                # Could not determine winner — default to draw to avoid
+                # corrupting stats.  record_game_with_winner will be used
+                # for the more precise flow.
+                ai_outcome = "draw"
         elif "stalemate" in result_lower or "draw" in result_lower:
             ai_outcome = "draw"
         else:
@@ -229,6 +236,16 @@ class ModelMonitor:
             self._update_elo(ai_outcome)
 
         self._save_outcomes()
+
+    @staticmethod
+    def _extract_winner(result: str) -> Optional[str]:
+        """Extract winner color from engine status strings like 'Checkmate(white)'
+        or 'Resigned(black)'.  Returns 'white', 'black', or None."""
+        import re
+        m = re.search(r'\(\s*(white|black)\s*\)', result, re.IGNORECASE)
+        if m:
+            return m.group(1).lower()
+        return None
 
     def record_game_with_winner(self, game_id: str, result: str,
                                  winner: Optional[str], player_color: str,

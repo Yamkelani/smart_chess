@@ -9,3 +9,4 @@ pub mod persistence;
 pub mod chess960;
 pub mod variants;
 pub mod multiplayer;
+pub mod zobrist;

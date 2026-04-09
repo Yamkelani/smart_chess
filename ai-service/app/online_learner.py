@@ -351,29 +351,27 @@ class OnlineLearner:
 
     # ---- Helpers ----
 
+    @staticmethod
+    def _extract_winner(result: str) -> Optional[str]:
+        """Extract winner color from engine status like 'Checkmate(white)'."""
+        import re
+        m = re.search(r'\(\s*(white|black)\s*\)', result, re.IGNORECASE)
+        return m.group(1).lower() if m else None
+
     def _result_to_value(self, result: str, player_color: str) -> float:
         """
         Convert a game result string to a value from white's perspective.
-        The AI plays the opposite of player_color.
+        +1.0 = white won, -1.0 = black won, 0.0 = draw.
         """
         result_lower = result.lower()
 
-        if "checkmate" in result_lower:
-            # The side that just moved delivered checkmate
-            # If it's checkmate and AI lost, the player won
-            # We need to figure out who won from context
-            # When checkmate happens, the side to move lost
-            # Since we track player_color, AI is opposite
-            # The caller should pass the status from engine which says "Checkmate"
-            # after a game-ending move. The side that can't move lost.
-            # We return value from white's perspective based on who the AI is
-            ai_color = "black" if player_color == "white" else "white"
-            # If the game is over with checkmate, the last move won.
-            # We don't have direct info about who won, so infer from the AI
-            # returning the status. For safety, use 0 (neutral) if unclear.
-            # Actually — the game result will be checked after the status
-            # We'll be more precise in the endpoint.
-            return 0.0  # Will be overridden by explicit result setting
+        if "checkmate" in result_lower or "resign" in result_lower:
+            winner = self._extract_winner(result)
+            if winner == "white":
+                return 1.0
+            elif winner == "black":
+                return -1.0
+            # Could not determine winner — fall through to 0.0
 
         if "stalemate" in result_lower or "draw" in result_lower:
             return 0.0

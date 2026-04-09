@@ -355,6 +355,9 @@ pub fn make_move(board: &mut Board, mv: &Move) -> bool {
         None => return false,
     };
 
+    // Detect capture BEFORE moving (for halfmove clock)
+    let is_capture = mv.is_en_passant || board.piece_at(mv.to).is_some();
+
     // Handle en passant capture
     if mv.is_en_passant {
         let captured_sq = match side {
@@ -425,7 +428,7 @@ pub fn make_move(board: &mut Board, mv: &Move) -> bool {
     if mv.from == 63 || mv.to == 63 { board.castling_rights.black_kingside = false; }
 
     // Update halfmove clock
-    if piece.piece_type == PieceType::Pawn || board.piece_at(mv.to).is_some() {
+    if piece.piece_type == PieceType::Pawn || is_capture {
         board.halfmove_clock = 0;
     } else {
         board.halfmove_clock += 1;

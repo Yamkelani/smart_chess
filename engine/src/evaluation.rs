@@ -1,8 +1,11 @@
 use crate::board::*;
 use crate::piece::{Color, PieceType};
+use crate::zobrist::hash_board;
+use std::sync::Mutex;
 
-/// Piece-square tables for positional evaluation (centipawns)
-/// These encode good positions for each piece type
+// ═══════════════════════════════════════════════════════════════════════
+// Piece-Square Tables (centipawns)
+// ═══════════════════════════════════════════════════════════════════════
 
 const PAWN_TABLE: [i32; 64] = [
      0,  0,  0,  0,  0,  0,  0,  0,
@@ -206,132 +209,398 @@ fn count_mobility(board: &Board, color: Color) -> i32 {
     mobility
 }
 
-/// Alpha-beta search with iterative deepening
+// ═══════════════════════════════════════════════════════════════════════
+// Transposition Table
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Type of transposition table entry bound.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TTFlag {
+    Exact,
+    LowerBound, // beta cutoff
+    UpperBound, // failed low
+}
+
+#[derive(Clone, Copy)]
+struct TTEntry {
+    hash: u64,
+    depth: u8,
+    score: i32,
+    flag: TTFlag,
+    best_move: Option<crate::moves::Move>,
+}
+
+impl Default for TTEntry {
+    fn default() -> Self {
+        Self {
+            hash: 0,
+            depth: 0,
+            score: 0,
+            flag: TTFlag::Exact,
+            best_move: None,
+        }
+    }
+}
+
+/// Fixed-size transposition table (≈16 MB default — 2^20 entries × 16 bytes)
+const TT_SIZE: usize = 1 << 20; // ~1 million entries
+
+lazy_static::lazy_static! {
+    static ref TT: Mutex<Vec<TTEntry>> = Mutex::new(vec![TTEntry::default(); TT_SIZE]);
+}
+
+fn tt_index(hash: u64) -> usize {
+    (hash as usize) % TT_SIZE
+}
+
+fn tt_probe(hash: u64) -> Option<TTEntry> {
+    if let Ok(table) = TT.lock() {
+        let entry = table[tt_index(hash)];
+        if entry.hash == hash {
+            return Some(entry);
+        }
+    }
+    None
+}
+
+fn tt_store(hash: u64, depth: u8, score: i32, flag: TTFlag, best_move: Option<crate::moves::Move>) {
+    if let Ok(mut table) = TT.lock() {
+        let idx = tt_index(hash);
+        // Always-replace strategy; prefer deeper entries
+        if depth >= table[idx].depth || table[idx].hash != hash {
+            table[idx] = TTEntry { hash, depth, score, flag, best_move };
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Move Ordering (MVV-LVA + killer moves + TT move)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// MVV-LVA (Most Valuable Victim – Least Valuable Attacker) scores.
+/// Higher is better — we want to search good captures first.
+fn mvv_lva_score(board: &Board, mv: &crate::moves::Move) -> i32 {
+    let victim = board.piece_at(mv.to);
+    let attacker = board.piece_at(mv.from);
+
+    match (victim, attacker) {
+        (Some(v), Some(a)) => v.piece_type.value() * 10 - a.piece_type.value(),
+        _ if mv.is_en_passant => PieceType::Pawn.value() * 10, // en passant captures a pawn
+        _ => 0,
+    }
+}
+
+/// Thread-local killer moves (indexed by depth, 2 slots each).
+/// Killer moves are quiet moves that caused beta cutoffs at the same depth.
+const MAX_KILLER_DEPTH: usize = 64;
+
+lazy_static::lazy_static! {
+    static ref KILLERS: Mutex<[[Option<crate::moves::Move>; 2]; MAX_KILLER_DEPTH]> =
+        Mutex::new([[None; 2]; MAX_KILLER_DEPTH]);
+}
+
+fn is_killer(mv: &crate::moves::Move, depth: usize) -> bool {
+    if depth >= MAX_KILLER_DEPTH { return false; }
+    if let Ok(killers) = KILLERS.lock() {
+        killers[depth][0].map_or(false, |k| k == *mv) ||
+        killers[depth][1].map_or(false, |k| k == *mv)
+    } else {
+        false
+    }
+}
+
+fn store_killer(mv: &crate::moves::Move, depth: usize) {
+    if depth >= MAX_KILLER_DEPTH { return; }
+    if let Ok(mut killers) = KILLERS.lock() {
+        if killers[depth][0] != Some(*mv) {
+            killers[depth][1] = killers[depth][0];
+            killers[depth][0] = Some(*mv);
+        }
+    }
+}
+
+/// Sort moves for best alpha-beta pruning:
+///   1. TT best move (score 900_000)
+///   2. Winning / equal captures by MVV-LVA (100_000 + mvv_lva)
+///   3. Killer moves (80_000)
+///   4. Quiet moves (0)
+fn order_moves(
+    moves: &mut Vec<crate::moves::Move>,
+    board: &Board,
+    tt_move: Option<crate::moves::Move>,
+    depth: usize,
+) {
+    moves.sort_by_cached_key(|mv| {
+        let mut priority = 0i32;
+
+        // TT move gets highest priority
+        if tt_move.map_or(false, |tm| tm == *mv) {
+            return -900_000;
+        }
+
+        // Captures sorted by MVV-LVA
+        let is_capture = board.piece_at(mv.to).is_some() || mv.is_en_passant;
+        if is_capture {
+            priority = -100_000 - mvv_lva_score(board, mv);
+        } else if is_killer(mv, depth) {
+            priority = -80_000;
+        }
+
+        priority
+    });
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Principal Search: Iterative Deepening + Alpha-Beta + TT + Ordering
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Find the best move using iterative deepening alpha-beta search.
 pub fn search_best_move(board: &Board, depth: u8) -> Option<(crate::moves::Move, i32)> {
-    use crate::moves::{generate_legal_moves, make_move, Move};
+    use crate::moves::{generate_legal_moves, make_move};
 
     let moves = generate_legal_moves(board);
     if moves.is_empty() {
         return None;
     }
 
+    // Clear killer table for fresh search
+    if let Ok(mut killers) = KILLERS.lock() {
+        for k in killers.iter_mut() {
+            *k = [None; 2];
+        }
+    }
+
+    let hash = hash_board(board);
     let mut best_move = moves[0];
     let mut best_score = i32::MIN + 1;
 
-    for mv in &moves {
-        let mut new_board = board.clone();
-        if make_move(&mut new_board, mv) {
-            let score = -alpha_beta(&new_board, depth - 1, i32::MIN + 1, i32::MAX - 1);
-            if score > best_score {
-                best_score = score;
-                best_move = *mv;
+    // Iterative deepening: search depth 1, 2, … up to requested depth.
+    // Each iteration warms the TT for the next one.
+    for d in 1..=depth {
+        let mut current_best = moves[0];
+        let mut current_score = i32::MIN + 1;
+
+        // Order root moves using TT from previous iteration
+        let tt_move = tt_probe(hash).and_then(|e| e.best_move);
+        let mut ordered = moves.clone();
+        order_moves(&mut ordered, board, tt_move, d as usize);
+
+        for mv in &ordered {
+            let mut new_board = board.clone();
+            if make_move(&mut new_board, mv) {
+                let score = -alpha_beta(&new_board, d - 1, -i32::MAX + 1, -current_score.max(i32::MIN + 1));
+                if score > current_score {
+                    current_score = score;
+                    current_best = *mv;
+                }
             }
         }
+
+        best_move = current_best;
+        best_score = current_score;
+
+        // Store root position in TT
+        tt_store(hash, d, best_score, TTFlag::Exact, Some(best_move));
     }
 
     Some((best_move, best_score))
 }
 
-/// Multi-PV search: return the top N moves with their evaluations and principal variations.
-/// Each result is (move, score, pv) where pv is a Vec<Move> showing the expected continuation.
-pub fn search_top_moves(board: &Board, depth: u8, num_moves: usize) -> Vec<(crate::moves::Move, i32, Vec<crate::moves::Move>)> {
-    use crate::moves::{generate_legal_moves, make_move, Move};
+/// Multi-PV search: return the top N moves with their evaluations and
+/// principal variations.
+pub fn search_top_moves(
+    board: &Board,
+    depth: u8,
+    num_moves: usize,
+) -> Vec<(crate::moves::Move, i32, Vec<crate::moves::Move>)> {
+    use crate::moves::{generate_legal_moves, make_move};
 
     let moves = generate_legal_moves(board);
     if moves.is_empty() {
         return vec![];
     }
 
-    // Score every legal move
-    let mut scored: Vec<(Move, i32)> = Vec::new();
+    let mut scored: Vec<(crate::moves::Move, i32)> = Vec::new();
     for mv in &moves {
         let mut new_board = board.clone();
         if make_move(&mut new_board, mv) {
-            let score = -alpha_beta(&new_board, depth.saturating_sub(1), i32::MIN + 1, i32::MAX - 1);
+            let score = -alpha_beta(
+                &new_board,
+                depth.saturating_sub(1),
+                i32::MIN + 1,
+                i32::MAX - 1,
+            );
             scored.push((*mv, score));
         }
     }
 
-    // Sort descending by score
     scored.sort_by(|a, b| b.1.cmp(&a.1));
     scored.truncate(num_moves);
 
-    // For each top move, extract a principal variation
-    scored.into_iter().map(|(mv, score)| {
-        let mut pv = vec![mv];
-        let mut pv_board = board.clone();
-        if make_move(&mut pv_board, &mv) {
-            extract_pv(&pv_board, depth.saturating_sub(1), &mut pv);
-        }
-        (mv, score, pv)
-    }).collect()
+    scored
+        .into_iter()
+        .map(|(mv, score)| {
+            let mut pv = vec![mv];
+            let mut pv_board = board.clone();
+            if make_move(&mut pv_board, &mv) {
+                extract_pv(&pv_board, depth.saturating_sub(1), &mut pv);
+            }
+            (mv, score, pv)
+        })
+        .collect()
 }
 
-/// Extract the principal variation by following the best move at each depth.
-fn extract_pv(board: &Board, depth: u8, pv: &mut Vec<crate::moves::Move>) {
-    use crate::moves::{generate_legal_moves, make_move};
+/// Extract the principal variation from the transposition table.
+fn extract_pv(board: &Board, max_depth: u8, pv: &mut Vec<crate::moves::Move>) {
+    use crate::moves::make_move;
 
-    if depth == 0 || pv.len() >= 8 {
+    if max_depth == 0 || pv.len() >= 10 {
         return;
     }
-    let moves = generate_legal_moves(board);
-    if moves.is_empty() {
-        return;
-    }
-
-    let mut best_move = moves[0];
-    let mut best_score = i32::MIN + 1;
-    for mv in &moves {
-        let mut new_board = board.clone();
-        if make_move(&mut new_board, mv) {
-            let score = -alpha_beta(&new_board, depth.saturating_sub(1), i32::MIN + 1, i32::MAX - 1);
-            if score > best_score {
-                best_score = score;
-                best_move = *mv;
+    let hash = hash_board(board);
+    if let Some(entry) = tt_probe(hash) {
+        if let Some(mv) = entry.best_move {
+            pv.push(mv);
+            let mut next = board.clone();
+            if make_move(&mut next, &mv) {
+                extract_pv(&next, max_depth - 1, pv);
             }
         }
     }
-
-    pv.push(best_move);
-    let mut next_board = board.clone();
-    if make_move(&mut next_board, &best_move) {
-        extract_pv(&next_board, depth.saturating_sub(1), pv);
-    }
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Alpha-Beta with Null-Move Pruning and Late-Move Reductions
+// ═══════════════════════════════════════════════════════════════════════
 
 fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32) -> i32 {
     use crate::moves::{generate_legal_moves, make_move};
 
-    if depth == 0 {
-        return quiescence_search(board, alpha, beta, 4);
+    // ── Transposition table probe ──
+    let hash = hash_board(board);
+    if let Some(entry) = tt_probe(hash) {
+        if entry.depth >= depth {
+            match entry.flag {
+                TTFlag::Exact => return entry.score,
+                TTFlag::LowerBound => {
+                    if entry.score >= beta { return entry.score; }
+                }
+                TTFlag::UpperBound => {
+                    if entry.score <= alpha { return entry.score; }
+                }
+            }
+        }
     }
 
-    let moves = generate_legal_moves(board);
+    // ── Leaf node ──
+    if depth == 0 {
+        return quiescence_search(board, alpha, beta, 6);
+    }
 
+    let in_check = board.is_in_check();
+
+    // ── Null-move pruning ──
+    // Skip when in check, at shallow depth, or in a zugzwang-prone endgame.
+    if !in_check && depth >= 3 {
+        let non_pawn = count_non_pawn_material(board);
+        if non_pawn > 600 { // Not pure pawn endgame
+            // Make a "null move" (pass the turn) and search with reduced depth
+            let mut null_board = board.clone();
+            null_board.side_to_move = board.side_to_move.opposite();
+            null_board.en_passant_square = None; // EP is invalid after null move
+            let r = if depth > 6 { 3 } else { 2 }; // Reduction factor
+            let null_score = -alpha_beta(&null_board, depth - 1 - r, -beta, -beta + 1);
+            if null_score >= beta {
+                return beta; // Null-move cutoff
+            }
+        }
+    }
+
+    // ── Generate & order moves ──
+    let mut moves = generate_legal_moves(board);
     if moves.is_empty() {
-        if board.is_in_check() {
-            return -19000 - depth as i32; // Checkmate (prefer faster mates)
+        if in_check {
+            return -19000 - depth as i32; // Checkmate
         }
         return 0; // Stalemate
     }
 
+    let tt_move = tt_probe(hash).and_then(|e| e.best_move);
+    order_moves(&mut moves, board, tt_move, depth as usize);
+
+    let mut best_score = i32::MIN + 1;
+    let mut best_move = moves[0];
+    let mut moves_searched = 0u32;
+    let original_alpha = alpha;
+
     for mv in &moves {
         let mut new_board = board.clone();
-        if make_move(&mut new_board, mv) {
-            let score = -alpha_beta(&new_board, depth - 1, -beta, -alpha);
-            if score >= beta {
-                return beta; // Beta cutoff
+        if !make_move(&mut new_board, mv) {
+            continue;
+        }
+
+        let score;
+
+        // ── Late-Move Reductions (LMR) ──
+        // After the first few moves (which are likely the best thanks to ordering),
+        // search remaining quiet moves at reduced depth. If they look promising,
+        // re-search at full depth.
+        let is_capture = board.piece_at(mv.to).is_some() || mv.is_en_passant;
+        let gives_check = new_board.is_in_check();
+
+        if moves_searched >= 4
+            && depth >= 3
+            && !is_capture
+            && !in_check
+            && !gives_check
+            && mv.promotion.is_none()
+        {
+            // Reduced search (depth - 2 instead of depth - 1)
+            let reduced = -alpha_beta(&new_board, depth - 2, -alpha - 1, -alpha);
+            if reduced > alpha {
+                // Re-search at full depth
+                score = -alpha_beta(&new_board, depth - 1, -beta, -alpha);
+            } else {
+                score = reduced;
             }
-            if score > alpha {
-                alpha = score;
+        } else {
+            score = -alpha_beta(&new_board, depth - 1, -beta, -alpha);
+        }
+
+        moves_searched += 1;
+
+        if score > best_score {
+            best_score = score;
+            best_move = *mv;
+        }
+        if score > alpha {
+            alpha = score;
+        }
+        if alpha >= beta {
+            // Store killer move (quiet moves that cause cutoffs)
+            if !is_capture {
+                store_killer(mv, depth as usize);
             }
+            // Beta cutoff — store as lower bound
+            tt_store(hash, depth, best_score, TTFlag::LowerBound, Some(best_move));
+            return beta;
         }
     }
 
-    alpha
+    // Determine TT flag
+    let flag = if best_score <= original_alpha {
+        TTFlag::UpperBound
+    } else {
+        TTFlag::Exact
+    };
+    tt_store(hash, depth, best_score, flag, Some(best_move));
+
+    best_score
 }
 
-/// Quiescence search to avoid horizon effect
+/// Quiescence search to avoid horizon effect — only searches captures.
 fn quiescence_search(board: &Board, mut alpha: i32, beta: i32, max_depth: u8) -> i32 {
     use crate::moves::{generate_legal_moves, make_move};
 
@@ -346,14 +615,13 @@ fn quiescence_search(board: &Board, mut alpha: i32, beta: i32, max_depth: u8) ->
         return alpha;
     }
 
-    let moves = generate_legal_moves(board);
-    for mv in &moves {
-        // Only search captures in quiescence
-        let is_capture = board.piece_at(mv.to).is_some() || mv.is_en_passant;
-        if !is_capture {
-            continue;
-        }
+    let mut moves = generate_legal_moves(board);
 
+    // Filter to captures only and sort by MVV-LVA
+    moves.retain(|mv| board.piece_at(mv.to).is_some() || mv.is_en_passant);
+    moves.sort_by_cached_key(|mv| -mvv_lva_score(board, mv));
+
+    for mv in &moves {
         let mut new_board = board.clone();
         if make_move(&mut new_board, mv) {
             let score = -quiescence_search(&new_board, -beta, -alpha, max_depth - 1);
