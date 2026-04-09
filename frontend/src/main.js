@@ -3639,36 +3639,95 @@ class ChessGame {
     return getAiBaseUrl();
   }
 
+  _createLiveCoachTipElement(tagText, bodyText) {
+    const tipEl = document.createElement('div');
+    tipEl.className = 'tutor-tip';
+
+    const tagEl = document.createElement('span');
+    tagEl.className = 'tutor-tag';
+    tagEl.textContent = tagText;
+    tipEl.appendChild(tagEl);
+
+    tipEl.appendChild(document.createTextNode(` ${bodyText}`));
+    return tipEl;
+  }
+
+  _createLiveCoachEvaluationElement(evaluation, bestMove) {
+    const tipEl = document.createElement('div');
+    tipEl.className = 'tutor-tip';
+
+    const numericEvaluation = typeof evaluation === 'number' ? evaluation : Number(evaluation);
+    const score = typeof evaluation === 'number' ? evaluation.toFixed(2) : evaluation;
+    const color = numericEvaluation > 0.1 ? '#10b981' : numericEvaluation < -0.1 ? '#ef4444' : '#fbbf24';
+
+    tipEl.style.borderLeft = `3px solid ${color}`;
+    tipEl.style.paddingLeft = '8px';
+
+    const tagEl = document.createElement('span');
+    tagEl.className = 'tutor-tag';
+    tagEl.style.background = `${color}22`;
+    tagEl.style.color = color;
+    tagEl.textContent = `EVAL ${score}`;
+    tipEl.appendChild(tagEl);
+
+    if (bestMove) {
+      const bestMoveEl = document.createElement('span');
+      bestMoveEl.style.fontSize = '0.7rem';
+      bestMoveEl.style.color = 'var(--text-muted)';
+      bestMoveEl.textContent = ` Best: ${bestMove}`;
+      tipEl.appendChild(bestMoveEl);
+    }
+
+    return tipEl;
+  }
+
+  _trimLiveCoachTips(coachEl, maxLength = 600) {
+    let totalLength = 0;
+    const children = Array.from(coachEl.children);
+
+    for (const child of children) {
+      totalLength += (child.textContent || '').length;
+      if (totalLength > maxLength) {
+        while (child.nextSibling) {
+          coachEl.removeChild(child.nextSibling);
+        }
+        coachEl.removeChild(child);
+        break;
+      }
+    }
+  }
+
   _showLiveCoachTip(data) {
     const coachEl = document.getElementById('tutor-coach-content');
     if (!coachEl) return;
 
     const tips = data.tips || data.coaching || [];
     const evaluation = data.evaluation;
-    const best_move = data.best_move;
+    const bestMove = data.best_move;
 
     if (!tips.length && !evaluation) return;
 
-    // Build a compact tip block
-    let html = '';
+    const newTipElements = [];
+
     if (evaluation) {
-      const score = typeof evaluation === 'number' ? evaluation.toFixed(2) : evaluation;
-      const color = evaluation > 0.1 ? '#10b981' : evaluation < -0.1 ? '#ef4444' : '#fbbf24';
-      html += `<div class="tutor-tip" style="border-left:3px solid ${color};padding-left:8px;">
-        <span class="tutor-tag" style="background:${color}22;color:${color};">EVAL ${score}</span>
-        ${best_move ? ` <span style="font-size:0.7rem;color:var(--text-muted);">Best: ${best_move}</span>` : ''}
-      </div>`;
+      newTipElements.push(this._createLiveCoachEvaluationElement(evaluation, bestMove));
     }
+
     for (const tip of tips.slice(0, 3)) {
       const text = typeof tip === 'string' ? tip : (tip.text || tip.message || '');
-      const tag = tip.tag || tip.category || 'TIP';
+      const tag = typeof tip === 'string' ? 'TIP' : (tip.tag || tip.category || 'TIP');
       if (text) {
-        html += `<div class="tutor-tip"><span class="tutor-tag">${tag.toUpperCase()}</span> ${text}</div>`;
+        newTipElements.push(this._createLiveCoachTipElement(String(tag).toUpperCase(), text));
       }
     }
 
-    if (html) {
-      coachEl.innerHTML = html + coachEl.innerHTML.slice(0, 600); // prepend, keep old tips trimmed
+    if (newTipElements.length) {
+      const fragment = document.createDocumentFragment();
+      for (const tipEl of newTipElements) {
+        fragment.appendChild(tipEl);
+      }
+      coachEl.prepend(fragment);
+      this._trimLiveCoachTips(coachEl, 600);
     }
   }
 
