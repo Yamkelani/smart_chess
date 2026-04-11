@@ -1,12 +1,18 @@
 {
   "name": "3d-chess-frontend",
-  "version": "1.0.0",
-  "description": "3D Chess Game with AI opponent — Windows, Android, iOS",
+  "version": "1.1.0",
+  "description": "3D Chess Game with AI opponent — Windows, macOS, Linux, Android, iOS, Web",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Yamkelani/smart_chess.git"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "lint": "eslint src/",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",

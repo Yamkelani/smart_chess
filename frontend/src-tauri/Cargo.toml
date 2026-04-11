@@ -1,9 +1,12 @@
 [package]
 name = "chess3d"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
-description = "3D Chess - Cross-platform chess game with AI"
+description = "3D Chess – Cross-platform chess game with AI, multiplayer, puzzles, and Chess960"
 authors = ["3D Chess Team"]
+license = "MIT"
+repository = "https://github.com/Yamkelani/smart_chess"
+homepage = "https://github.com/Yamkelani/smart_chess"
 
 [lib]
 name = "chess3d_lib"

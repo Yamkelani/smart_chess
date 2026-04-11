@@ -4,3 +4,8 @@ node_modules/
 dist/
 app-icon.png
 generate-icon.js
+.git
+.gitignore
+Dockerfile
+.dockerignore
+*.md
