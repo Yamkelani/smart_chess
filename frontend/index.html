@@ -1741,10 +1741,10 @@
         <h2 id="overlay-title"></h2>
         <p id="overlay-message"></p>
         <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-          <button class="btn" id="overlay-review-btn" onclick="window.game._reviewGame()">📊 Review Game</button>
-          <button class="btn" onclick="window.game.newGame()">Play Again</button>
+          <button class="btn" id="overlay-review-btn">📊 Review Game</button>
+          <button class="btn" id="overlay-play-again-btn">Play Again</button>
         </div>
-        <button style="position:absolute;top:10px;right:14px;background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer;" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
+        <button id="overlay-dismiss-btn" style="position:absolute;top:10px;right:14px;background:none;border:none;color:var(--text-muted);font-size:1.4rem;cursor:pointer;" title="Dismiss">&times;</button>
       </div>
       <!-- Promotion Dialog -->
       <div id="promotion-dialog">

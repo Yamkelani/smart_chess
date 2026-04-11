@@ -186,6 +186,16 @@ class ChessGame {
     if (exportBtn) exportBtn.addEventListener('click', () => this._exportPGN());
     const reviewBtn = document.getElementById('btn-review');
     if (reviewBtn) reviewBtn.addEventListener('click', () => this._reviewGame());
+
+    // Overlay buttons (use addEventListener instead of inline onclick for CSP compliance)
+    const overlayReviewBtn = document.getElementById('overlay-review-btn');
+    const overlayPlayAgainBtn = document.getElementById('overlay-play-again-btn');
+    const overlayDismissBtn = document.getElementById('overlay-dismiss-btn');
+    if (overlayReviewBtn) overlayReviewBtn.addEventListener('click', () => this._reviewGame());
+    if (overlayPlayAgainBtn) overlayPlayAgainBtn.addEventListener('click', () => this.newGame());
+    if (overlayDismissBtn) overlayDismissBtn.addEventListener('click', () => {
+      document.getElementById('overlay').style.display = 'none';
+    });
     const analyzeBtn = document.getElementById('btn-analyze');
     if (analyzeBtn) analyzeBtn.addEventListener('click', () => this._toggleAnalysis());
     const attackMapBtn = document.getElementById('btn-attack-map');
@@ -4420,10 +4430,14 @@ class ChessGame {
           <div><span style="font-size:1.2rem;font-weight:700;color:#ca3431">${result.mistakes}</span><br/><span style="font-size:0.7rem;color:var(--text-muted)">Wrong</span></div>
           <div><span style="font-size:1.2rem;font-weight:700;color:var(--text-primary)">${Math.floor(result.timeTaken)}s</span><br/><span style="font-size:0.7rem;color:var(--text-muted)">Time</span></div>
         </div>
-        <button class="btn" onclick="document.getElementById('drill-result-modal')?.remove()">Close</button>
+        <button class="btn" id="drill-result-close-btn">Close</button>
       </div>
     `;
     this._showFeatureModal('drill-result-modal', html);
+    const drillCloseBtn = document.getElementById('drill-result-close-btn');
+    if (drillCloseBtn) drillCloseBtn.addEventListener('click', () => {
+      document.getElementById('drill-result-modal')?.remove();
+    });
   }
 
   // ══════════════════════════════════════════════════════════════
