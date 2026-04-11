@@ -1258,8 +1258,8 @@ class ChessGame {
     document.getElementById('thinking').style.display = 'block';
 
     // ── Natural thinking delay ──────────────────────────────────
-    // Simulate realistic "thinking time" that scales with difficulty.
-    // Adds randomness so it doesn't feel robotic.
+    // Wait BEFORE computing the move so the board doesn't update instantly.
+    // Scales with difficulty and has randomness to feel human-like.
     const difficulty = document.getElementById('difficulty-select').value;
     const thinkingDelays = {
       beginner:     { min: 800,  max: 2000  },
@@ -1268,13 +1268,12 @@ class ChessGame {
       expert:       { min: 2000, max: 5000  },
       master:       { min: 2500, max: 6000  },
     };
-    const delay = thinkingDelays[difficulty] || { min: 1000, max: 3000 };
-    const thinkTime = delay.min + Math.random() * (delay.max - delay.min);
-    const thinkStart = performance.now();
+    const delayRange = thinkingDelays[difficulty] || { min: 1000, max: 3000 };
+    const thinkTime = delayRange.min + Math.random() * (delayRange.max - delayRange.min);
+    await new Promise(r => setTimeout(r, thinkTime));
 
     try {
       // Try the neural network AI first
-      const difficulty = document.getElementById('difficulty-select').value;
       let moveUci = null;
 
       const aiResult = await this.api.aiMove(this.fen, difficulty, this.gameId, this.playerColor, this.aiPersonality);
@@ -1357,11 +1356,6 @@ class ChessGame {
         console.error('Engine fallback also failed:', e2);
       }
     } finally {
-      // Ensure the thinking indicator stays visible for the full think time
-      const elapsed = performance.now() - thinkStart;
-      const remaining = thinkTime - elapsed;
-      if (remaining > 0) await new Promise(r => setTimeout(r, remaining));
-
       this.thinking = false;
       document.getElementById('thinking').style.display = 'none';
     }
