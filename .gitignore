@@ -39,3 +39,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# AI assistant local notes
+CLAUDE.md
+.claude/
