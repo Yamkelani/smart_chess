@@ -170,14 +170,21 @@ export class ChessAPI {
     return null;
   }
 
-  async gameComplete(gameId, result, playerColor = 'white') {
+  async gameComplete(gameId, result, playerColor = 'white', winner = null) {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
       const resp = await fetch(`${aiBase}/ai/game-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game_id: gameId, result, player_color: playerColor }),
+        // `winner` is the structured outcome ('white' | 'black' | null for a
+        // draw). `result` is a display string and must not be parsed for it.
+        body: JSON.stringify({
+          game_id: gameId,
+          result,
+          player_color: playerColor,
+          winner,
+        }),
       });
       if (resp.ok) {
         const data = await resp.json();

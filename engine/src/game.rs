@@ -13,6 +13,31 @@ pub enum GameStatus {
     Resigned(String),    // Color that resigned
 }
 
+impl GameStatus {
+    /// The winning colour ("white"/"black"), or None for an unfinished or drawn game.
+    ///
+    /// Consumers must use this rather than parsing the `Debug` rendering of the
+    /// status. `format!("{:?}", ..)` produces `Checkmate("white")` — quotes
+    /// included — which is a display form, not a wire contract.
+    pub fn winner(&self) -> Option<&str> {
+        match self {
+            GameStatus::Checkmate(winner) => Some(winner.as_str()),
+            // The colour recorded is the one that resigned, so the winner is the other.
+            GameStatus::Resigned(loser) => match loser.as_str() {
+                "white" => Some("black"),
+                "black" => Some("white"),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// True once the game can accept no further moves.
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self, GameStatus::Active)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameState {
     pub id: String,

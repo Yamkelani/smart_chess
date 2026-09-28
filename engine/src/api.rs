@@ -133,6 +133,11 @@ pub struct GameStateResponse {
     pub pieces: Vec<crate::board::PieceInfo>,
     pub legal_moves: Vec<String>,
     pub status: String,
+    /// Winning colour, or null for an unfinished or drawn game.
+    ///
+    /// `status` is a Debug rendering intended for display. Consumers that need
+    /// the outcome must read this field instead of parsing that string.
+    pub winner: Option<String>,
     pub move_history: Vec<String>,
     pub is_check: bool,
 }
@@ -147,6 +152,9 @@ pub struct MoveResponse {
     pub captured: Option<String>,
     pub is_check: bool,
     pub status: String,
+    /// Winning colour, or null for an unfinished or drawn game. See
+    /// `GameStateResponse::winner`.
+    pub winner: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -340,6 +348,7 @@ pub async fn set_position(
         pieces: game.board.to_piece_list(),
         legal_moves: game.get_legal_moves(),
         status: format!("{:?}", game.status),
+        winner: game.status.winner().map(str::to_string),
         move_history: game.move_history.clone(),
         is_check: game.board.is_in_check(),
     })
@@ -364,6 +373,7 @@ pub async fn get_game(
                 pieces: game.board.to_piece_list(),
                 legal_moves: game.get_legal_moves(),
                 status: format!("{:?}", game.status),
+                winner: game.status.winner().map(str::to_string),
                 move_history: game.move_history.clone(),
                 is_check: game.board.is_in_check(),
             };
@@ -401,6 +411,7 @@ pub async fn make_move(
                         captured: result.captured,
                         is_check: result.is_check,
                         status: format!("{:?}", game.status),
+                        winner: game.status.winner().map(str::to_string),
                     };
                     HttpResponse::Ok().json(response)
                 }
@@ -551,6 +562,7 @@ pub async fn engine_move(
                 captured: result.captured,
                 is_check: result.is_check,
                 status: format!("{:?}", game.status),
+                winner: game.status.winner().map(str::to_string),
             };
             HttpResponse::Ok().json(response)
         }
@@ -762,6 +774,7 @@ pub async fn resign_game(
         side_to_move: stm.to_string(),
         pieces: game.board.to_piece_list(),
         status: format!("{:?}", game.status),
+        winner: game.status.winner().map(str::to_string),
         legal_moves: vec![],
         move_history: game.move_history.clone(),
         is_check: false,
@@ -794,6 +807,7 @@ pub async fn draw_game(
         side_to_move: stm.to_string(),
         pieces: game.board.to_piece_list(),
         status: format!("{:?}", game.status),
+        winner: game.status.winner().map(str::to_string),
         legal_moves: vec![],
         move_history: game.move_history.clone(),
         is_check: false,

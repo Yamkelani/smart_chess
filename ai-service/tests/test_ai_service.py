@@ -310,6 +310,44 @@ class TestOnlineLearner:
         assert OnlineLearner._extract_winner("Stalemate") is None
         assert OnlineLearner._extract_winner("Draw") is None
 
+    def test_extract_winner_from_actual_engine_format(self):
+        """The Rust engine serialises status with format!("{:?}"), and Debug for
+        Checkmate(String) includes the quotes.  These are the strings that
+        actually arrive over the wire; the un-quoted forms above never occur.
+        """
+        assert OnlineLearner._extract_winner('Checkmate("white")') == "white"
+        assert OnlineLearner._extract_winner('Checkmate("black")') == "black"
+
+    def test_resignation_winner_is_the_player_who_did_not_resign(self):
+        """GameStatus::Resigned carries the colour that RESIGNED, so the winner
+        is the opposite colour.  Reading the token as the winner inverted the
+        label on every resigned game.
+        """
+        assert OnlineLearner._extract_winner('Resigned("black")') == "white"
+        assert OnlineLearner._extract_winner('Resigned("white")') == "black"
+
+    def test_result_to_value_uses_real_engine_strings(self):
+        """A decisive game must never be labelled as a draw.  Mislabelling every
+        win and loss as 0.0 trains the value head toward a constant.
+        """
+        learner = OnlineLearner.__new__(OnlineLearner)
+        assert learner._result_to_value('Checkmate("white")', "white") == 1.0
+        assert learner._result_to_value('Checkmate("black")', "white") == -1.0
+        # Black resigned, so white won.
+        assert learner._result_to_value('Resigned("black")', "white") == 1.0
+        assert learner._result_to_value('Resigned("white")', "white") == -1.0
+
+    def test_explicit_winner_overrides_string_parsing(self):
+        """The winner should be taken from structured data when supplied, so the
+        pipeline does not depend on parsing a display string at all.
+        """
+        learner = OnlineLearner.__new__(OnlineLearner)
+        assert learner._white_value_for("Checkmate", winner="white") == 1.0
+        assert learner._white_value_for("Checkmate", winner="black") == -1.0
+        assert learner._white_value_for("Draw", winner=None) == 0.0
+        # With no explicit winner it must still fall back to parsing.
+        assert learner._white_value_for('Checkmate("black")', winner=None) == -1.0
+
     def test_result_to_value_white_wins(self):
         learner = OnlineLearner.__new__(OnlineLearner)
         val = learner._result_to_value("Checkmate(white)", "white")
