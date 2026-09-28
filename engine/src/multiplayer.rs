@@ -79,6 +79,24 @@ pub struct MultiplayerState {
     pub leaderboard: Mutex<Vec<LeaderboardEntry>>,
 }
 
+impl MultiplayerRoom {
+    /// The colour this player is seated as, or None if they are not a player in
+    /// this room (a spectator or an unrelated caller).
+    ///
+    /// `host_color` is resolved to a concrete colour when the room is created,
+    /// so it is only ever "white" or "black" here.
+    pub fn color_of(&self, player_id: &str) -> Option<&'static str> {
+        let host_is_white = self.host_color == "white";
+        if player_id == self.host_id {
+            Some(if host_is_white { "white" } else { "black" })
+        } else if self.guest_id.as_deref() == Some(player_id) {
+            Some(if host_is_white { "black" } else { "white" })
+        } else {
+            None
+        }
+    }
+}
+
 impl MultiplayerState {
     pub fn new() -> Self {
         Self {
@@ -192,6 +210,22 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
+/// Resolve a requested host colour to a concrete one.
+///
+/// "random" must be settled when the room is created: left unresolved, every
+/// `host_color == "white"` comparison reads false and the host silently always
+/// plays black.
+fn resolve_host_color(requested: Option<&str>) -> String {
+    match requested.unwrap_or("white") {
+        "black" => "black".to_string(),
+        "random" => {
+            use rand::Rng;
+            if rand::thread_rng().gen_bool(0.5) { "white".to_string() } else { "black".to_string() }
+        }
+        _ => "white".to_string(),
+    }
+}
+
 fn generate_room_code() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -209,6 +243,7 @@ pub async fn create_room(
     let room_id = Uuid::new_v4().to_string();
     let room_code = generate_room_code();
     let now = now_epoch();
+    let host_color = resolve_host_color(body.host_color.as_deref());
 
     let room = MultiplayerRoom {
         room_id: room_id.clone(),
@@ -218,7 +253,7 @@ pub async fn create_room(
         guest_id: None,
         host_name: body.player_name.clone(),
         guest_name: None,
-        host_color: body.host_color.clone().unwrap_or_else(|| "white".to_string()),
+        host_color: host_color.clone(),
         variant: body.variant.clone().unwrap_or_else(|| "standard".to_string()),
         time_control: body.time_control.clone(),
         status: RoomStatus::Waiting,
@@ -239,7 +274,7 @@ pub async fn create_room(
         host_name: body.player_name.clone(),
         guest_name: None,
         game_id: None,
-        host_color: body.host_color.clone().unwrap_or_else(|| "white".to_string()),
+        host_color: host_color.clone(),
         variant: body.variant.clone().unwrap_or_else(|| "standard".to_string()),
         spectator_count: 0,
     })
@@ -369,16 +404,9 @@ pub async fn room_poll(
         };
 
     // Determine if it's this player's turn
-    let your_turn = if let Some(ref stm) = side_to_move {
-        let is_host = body.player_id == room.host_id;
-        let host_is_white = room.host_color == "white";
-        let white_to_move = stm == "white";
-        (is_host && host_is_white && white_to_move) || 
-        (is_host && !host_is_white && !white_to_move) ||
-        (!is_host && host_is_white && !white_to_move) ||
-        (!is_host && !host_is_white && white_to_move)
-    } else {
-        false
+    let your_turn = match (&side_to_move, room.color_of(&body.player_id)) {
+        (Some(stm), Some(mine)) => stm == mine,
+        _ => false,
     };
 
     let new_messages: Vec<ChatMessage> = room.chat_messages
@@ -436,6 +464,17 @@ pub async fn room_move(
         })),
     };
 
+    // The caller must be one of the two seated players. Note this is a game-rule
+    // check, not a security control: player_id is client-supplied and there is
+    // no authentication yet, so a caller can still claim another player's id.
+    // Real enforcement requires authenticated identity.
+    let player_color = match room.color_of(&body.player_id) {
+        Some(c) => c,
+        None => return HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "You are not a player in this room"
+        })),
+    };
+
     let mut games = game_state.games.lock().unwrap();
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
@@ -443,6 +482,17 @@ pub async fn room_move(
             "error": "Game not found"
         })),
     };
+
+    // Only the side to move may move. Without this a player could move for both
+    // colours and play out their opponent's game.
+    let side_to_move = format!("{}", game.board.side_to_move);
+    if side_to_move != player_color {
+        return HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Not your turn",
+            "side_to_move": side_to_move,
+            "your_color": player_color
+        }));
+    }
 
     match game.make_move(&body.uci) {
         Ok(result) => {
