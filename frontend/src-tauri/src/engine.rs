@@ -1,6 +1,15 @@
 use chess_engine::attacks;
 use chess_engine::board::Board;
-use chess_engine::evaluation::{evaluate, search_best_move, search_top_moves};
+use chess_engine::evaluation::{evaluate, search_best_move_timed, search_top_moves_timed};
+
+/// Wall-clock budget for an embedded search, in milliseconds.
+///
+/// The desktop build runs the search on the invoking thread, so an unbounded
+/// deep search freezes the UI (depth 12 takes roughly 46 seconds).
+const SEARCH_TIME_LIMIT_MS: u64 = 3000;
+
+/// Hard ceiling on a caller-supplied search depth.
+const MAX_SEARCH_DEPTH: u8 = 12;
 use chess_engine::game::GameState;
 use chess_engine::moves::generate_legal_moves;
 use serde::{Deserialize, Serialize};
@@ -150,7 +159,7 @@ pub fn engine_move(state: State<'_, EngineState>, game_id: String) -> Result<Mov
     let game = games.get_mut(&game_id).ok_or("Game not found")?;
 
     let depth = 4;
-    match search_best_move(&game.board, depth) {
+    match search_best_move_timed(&game.board, depth, SEARCH_TIME_LIMIT_MS) {
         Some((best_move, _score)) => {
             let uci = best_move.to_uci();
             let result = game.make_move(&uci)?;
@@ -172,9 +181,9 @@ pub fn engine_move(state: State<'_, EngineState>, game_id: String) -> Result<Mov
 #[tauri::command]
 pub fn evaluate_position(fen: String, depth: Option<u8>) -> Result<EvalResponse, String> {
     let board = Board::from_fen(&fen)?;
-    let d = depth.unwrap_or(4);
+    let d = depth.unwrap_or(4).clamp(1, MAX_SEARCH_DEPTH);
     let eval = evaluate(&board);
-    let best = search_best_move(&board, d);
+    let best = search_best_move_timed(&board, d, SEARCH_TIME_LIMIT_MS);
     let legal = generate_legal_moves(&board).iter().map(|m| m.to_uci()).collect();
 
     Ok(EvalResponse {
@@ -247,10 +256,10 @@ pub async fn notify_game_complete(
 #[tauri::command]
 pub fn analyze_position(fen: String, depth: Option<u8>, num_moves: Option<usize>) -> Result<AnalyzeResponse, String> {
     let board = Board::from_fen(&fen)?;
-    let d = depth.unwrap_or(5);
+    let d = depth.unwrap_or(5).clamp(1, MAX_SEARCH_DEPTH);
     let n = num_moves.unwrap_or(5).min(10);
     let eval = evaluate(&board);
-    let top = search_top_moves(&board, d, n);
+    let top = search_top_moves_timed(&board, d, n, SEARCH_TIME_LIMIT_MS);
     let total_legal = generate_legal_moves(&board).len();
 
     let top_moves: Vec<AnalyzedMove> = top.into_iter().map(|(mv, score, pv)| {
