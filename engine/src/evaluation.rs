@@ -624,12 +624,9 @@ fn order_moves(
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Find the best move using iterative deepening alpha-beta search.
-/// `time_limit_ms` — soft time limit in milliseconds (0 = unlimited).
-pub fn search_best_move(board: &Board, depth: u8) -> Option<(crate::moves::Move, i32)> {
-    search_best_move_timed(board, depth, 0)
-}
-
-/// Same as `search_best_move` but with an explicit time budget.
+///
+/// `time_limit_ms` — soft time limit in milliseconds (0 = unlimited). Anything
+/// serving a request must pass a real budget; see api::search_time_budget_ms.
 pub fn search_best_move_timed(board: &Board, depth: u8, time_limit_ms: u64) -> Option<(crate::moves::Move, i32)> {
     use crate::moves::{generate_legal_moves, make_move};
 

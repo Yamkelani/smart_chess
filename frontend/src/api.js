@@ -101,7 +101,11 @@ export class ChessAPI {
   }
 
   /**
-   * Set position on an existing game (for undo without creating a new game).
+   * Load an arbitrary position (board setup / opening exploration).
+   *
+   * This discards the game's move history and marks it as analysis, so the
+   * result is unranked. For undo, use undoMoves() instead — it rewinds through
+   * the game's real history and keeps the game rankable.
    */
   async setPosition(gameId, fen) {
     if (isTauri()) {
@@ -111,6 +115,21 @@ export class ChessAPI {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    return resp.json();
+  }
+
+  /**
+   * Undo `moves` half-moves server-side, rewinding through the game's own
+   * recorded history. The server is authoritative: it will refuse to rewind
+   * further back than the moves actually played.
+   */
+  async undoMoves(gameId, moves = 1) {
+    const resp = await fetch(`${getEngineBase()}/game/${gameId}/undo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ moves }),
     });
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
