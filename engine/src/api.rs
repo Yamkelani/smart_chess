@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use crate::attacks;
 use crate::board::Board;
-use crate::evaluation::{evaluate, search_best_move, search_top_moves};
+use crate::evaluation::{evaluate, search_best_move_timed, search_top_moves_timed};
 use crate::game::{GameState, GameStatus};
 use crate::moves::generate_legal_moves;
 use crate::persistence;
@@ -15,6 +15,37 @@ use crate::variants;
 /// Maximum number of games to keep in memory.  When exceeded, the oldest
 /// (by insertion/access order) are evicted.  Set via MAX_GAMES env var.
 const MAX_GAMES: usize = 500;
+
+/// Hard ceiling on the search depth any client may request.
+///
+/// Depth alone does not bound cost — see `search_time_budget_ms` — but it stops
+/// a caller asking for work that could never complete within the budget.
+pub const MAX_SEARCH_DEPTH: u8 = 12;
+
+/// Depth used when a request omits one.
+pub const DEFAULT_SEARCH_DEPTH: u8 = 4;
+
+/// Clamp a client-supplied search depth into a safe range.
+///
+/// Zero is raised to one ply, since a zero-depth search returns no move.
+pub fn clamp_depth(requested: Option<u8>) -> u8 {
+    requested
+        .unwrap_or(DEFAULT_SEARCH_DEPTH)
+        .clamp(1, MAX_SEARCH_DEPTH)
+}
+
+/// Wall-clock budget for a single search, in milliseconds.
+///
+/// This is the limit that actually bounds cost: depth 12 on a dense position
+/// takes roughly 46 seconds unbounded, so without a time budget a handful of
+/// requests can occupy every worker.  Override with SEARCH_TIME_LIMIT_MS.
+pub fn search_time_budget_ms() -> u64 {
+    std::env::var("SEARCH_TIME_LIMIT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(3000)
+}
 
 pub struct AppState {
     pub games: Mutex<HashMap<String, GameState>>,
@@ -408,13 +439,25 @@ pub async fn evaluate_position(body: web::Json<EvalRequest>) -> impl Responder {
         Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
     };
 
-    let depth = body.depth.unwrap_or(4);
+    let depth = clamp_depth(body.depth);
+    let budget = search_time_budget_ms();
     let eval = evaluate(&board);
-    let best = search_best_move(&board, depth);
-    let legal = generate_legal_moves(&board)
+    let legal: Vec<String> = generate_legal_moves(&board)
         .iter()
         .map(|m| m.to_uci())
         .collect();
+
+    // The search is CPU-bound and blocking.  Run it on the blocking pool so it
+    // cannot occupy the async worker that serves other connections.
+    let best = match web::block(move || search_best_move_timed(&board, depth, budget)).await {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("evaluate: search task failed: {}", e);
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "Search failed".to_string(),
+            });
+        }
+    };
 
     HttpResponse::Ok().json(EvalResponse {
         fen: body.fen.clone(),
@@ -430,45 +473,88 @@ pub async fn engine_move(
     query: web::Query<EngineMoveQuery>,
 ) -> impl Responder {
     let game_id = path.into_inner();
-    let mut games = lock_games!(data);
+    let depth = clamp_depth(query.depth);
+    let budget = search_time_budget_ms();
 
-    ensure_game_loaded(&mut games, &game_id);
-
-    match games.get_mut(&game_id) {
-        Some(game) => {
-            let depth = query.depth.unwrap_or(4).min(12);
-            match search_best_move(&game.board, depth) {
-                Some((best_move, score)) => {
-                    let uci = best_move.to_uci();
-                    match game.make_move(&uci) {
-                        Ok(result) => {
-                            if let Err(e) = persistence::save_game(game) {
-                                log::warn!("Could not persist game after engine move: {}", e);
-                            }
-                            let response = MoveResponse {
-                                success: true,
-                                move_uci: result.move_uci,
-                                fen: game.board.to_fen(),
-                                pieces: game.board.to_piece_list(),
-                                legal_moves: game.get_legal_moves(),
-                                captured: result.captured,
-                                is_check: result.is_check,
-                                status: format!("{:?}", game.status),
-                            };
-                            HttpResponse::Ok().json(response)
-                        }
-                        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse { error: e }),
-                    }
-                }
-                None => HttpResponse::Ok().json(serde_json::json!({
-                    "error": "No moves available",
-                    "status": format!("{:?}", game.status)
-                })),
+    // Phase 1: take a snapshot of the position under the lock, then release it.
+    // The search must not hold the global games lock — it can run for seconds,
+    // and every other game's moves would block behind it.
+    let (search_board, fen_before, status_before) = {
+        let mut games = lock_games!(data);
+        ensure_game_loaded(&mut games, &game_id);
+        match games.get(&game_id) {
+            Some(game) => (
+                game.board.clone(),
+                game.board.to_fen(),
+                format!("{:?}", game.status),
+            ),
+            None => {
+                return HttpResponse::NotFound().json(ErrorResponse {
+                    error: "Game not found".to_string(),
+                })
             }
         }
-        None => HttpResponse::NotFound().json(ErrorResponse {
-            error: "Game not found".to_string(),
-        }),
+    };
+
+    // Phase 2: search off the async worker, with no lock held.
+    let best = match web::block(move || search_best_move_timed(&search_board, depth, budget)).await {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("engine_move: search task failed: {}", e);
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "Search failed".to_string(),
+            });
+        }
+    };
+
+    let (best_move, _score) = match best {
+        Some(b) => b,
+        None => {
+            return HttpResponse::Ok().json(serde_json::json!({
+                "error": "No moves available",
+                "status": status_before
+            }))
+        }
+    };
+
+    // Phase 3: re-acquire the lock and apply, but only if the position has not
+    // moved on while we were searching.  Without this check a concurrent move
+    // would let us apply a move computed for a stale position.
+    let uci = best_move.to_uci();
+    let mut games = lock_games!(data);
+    let game = match games.get_mut(&game_id) {
+        Some(g) => g,
+        None => {
+            return HttpResponse::NotFound().json(ErrorResponse {
+                error: "Game not found".to_string(),
+            })
+        }
+    };
+
+    if game.board.to_fen() != fen_before {
+        return HttpResponse::Conflict().json(ErrorResponse {
+            error: "Position changed during search; retry".to_string(),
+        });
+    }
+
+    match game.make_move(&uci) {
+        Ok(result) => {
+            if let Err(e) = persistence::save_game(game) {
+                log::warn!("Could not persist game after engine move: {}", e);
+            }
+            let response = MoveResponse {
+                success: true,
+                move_uci: result.move_uci,
+                fen: game.board.to_fen(),
+                pieces: game.board.to_piece_list(),
+                legal_moves: game.get_legal_moves(),
+                captured: result.captured,
+                is_check: result.is_check,
+                status: format!("{:?}", game.status),
+            };
+            HttpResponse::Ok().json(response)
+        }
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse { error: e }),
     }
 }
 
@@ -481,11 +567,28 @@ pub async fn analyze_position(body: web::Json<AnalyzeRequest>) -> impl Responder
         Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
     };
 
-    let depth = body.depth.unwrap_or(5);
+    let depth = clamp_depth(body.depth);
     let num_moves = body.num_moves.unwrap_or(5).min(10);
+    let budget = search_time_budget_ms();
     let eval = evaluate(&board);
-    let top = search_top_moves(&board, depth, num_moves);
     let total_legal = generate_legal_moves(&board).len();
+
+    // Multi-PV analysis is the most expensive endpoint: it scores every legal
+    // move.  Bound it and keep it off the async worker.
+    let search_board = board.clone();
+    let top = match web::block(move || {
+        search_top_moves_timed(&search_board, depth, num_moves, budget)
+    })
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("analyze: search task failed: {}", e);
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "Search failed".to_string(),
+            });
+        }
+    };
 
     let top_moves: Vec<AnalyzedMove> = top.into_iter().map(|(mv, score, pv)| {
         // Make the move to get the resulting position
