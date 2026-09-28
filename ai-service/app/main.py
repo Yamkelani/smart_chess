@@ -64,6 +64,10 @@ class GameCompleteRequest(BaseModel):
     game_id: str
     result: str
     player_color: str = "white"
+    # Structured outcome. Optional so existing clients keep working, but callers
+    # should send it: deriving the winner from `result` means parsing a display
+    # string, which is how every decisive game came to be labelled a draw.
+    winner: Optional[str] = None
 
 class EvalRequest(BaseModel):
     fen: str
@@ -478,7 +482,11 @@ async def game_complete(req: GameCompleteRequest):
     if not online_learner:
         return {"learned": False, "reason": "online learner not initialized"}
     try:
-        result = online_learner.complete_game(req.game_id, req.result)
+        result = online_learner.complete_game(req.game_id, req.result, req.winner)
+        logger.info(
+            "[game-complete] game=%s result=%s winner=%s learned=%s",
+            req.game_id[:8], req.result, req.winner, result.get("learned"),
+        )
         return result
     except Exception as e:
         logger.error("[game-complete] error: %s", e)

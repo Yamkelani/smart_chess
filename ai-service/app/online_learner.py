@@ -165,7 +165,8 @@ class OnlineLearner:
             if session:
                 session.positions.append(record)
 
-    def complete_game(self, game_id: str, result: str) -> dict:
+    def complete_game(self, game_id: str, result: str,
+                      winner: Optional[str] = None) -> dict:
         """
         Signal that a game has ended. Converts recorded positions to
         training examples with proper value targets, adds to replay
@@ -187,7 +188,7 @@ class OnlineLearner:
         session.is_complete = True
 
         # Determine game value from white's perspective
-        white_value = self._result_to_value(result, session.player_color)
+        white_value = self._white_value_for(result, winner)
 
         # Convert positions to training examples
         examples = []
@@ -368,11 +369,55 @@ class OnlineLearner:
     # ---- Helpers ----
 
     @staticmethod
-    def _extract_winner(result: str) -> Optional[str]:
-        """Extract winner color from engine status like 'Checkmate(white)'."""
+    def _extract_colour(result: str) -> Optional[str]:
+        """Extract the colour token from an engine status string.
+
+        The Rust engine serialises status with format!("{:?}", status), and Debug
+        for Checkmate(String) emits the quotes: Checkmate("white").  Quotes are
+        optional here so both that form and a bare Checkmate(white) parse, since
+        this is a display string whose shape is not a contract we control.
+
+        Note the token's *meaning* depends on the variant: for Checkmate it is
+        the winner, for Resigned it is the player who resigned.
+        """
         import re
-        m = re.search(r'\(\s*(white|black)\s*\)', result, re.IGNORECASE)
+        m = re.search(r'\(\s*"?(white|black)"?\s*\)', result, re.IGNORECASE)
         return m.group(1).lower() if m else None
+
+    @staticmethod
+    def _other_colour(colour: str) -> Optional[str]:
+        return {"white": "black", "black": "white"}.get(colour)
+
+    @classmethod
+    def _extract_winner(cls, result: str) -> Optional[str]:
+        """The colour that *won*, or None if undetermined.
+
+        GameStatus::Resigned records the colour that resigned (engine api.rs
+        sets it from the caller's own colour), so the winner is its opposite.
+        Treating the token as the winner inverted the label on every resignation.
+        """
+        colour = cls._extract_colour(result)
+        if colour is None:
+            return None
+        if "resign" in result.lower():
+            return cls._other_colour(colour)
+        return colour
+
+    def _white_value_for(self, result: str, winner: Optional[str]) -> float:
+        """Value target from white's perspective: +1 white won, -1 black won, 0 draw.
+
+        Uses the structured `winner` when the caller supplies one and only falls
+        back to parsing the status string when it is absent, so a change to the
+        engine's display format cannot silently destroy the learning signal.
+        """
+        if winner is not None:
+            normalised = winner.strip().lower()
+            if normalised == "white":
+                return 1.0
+            if normalised == "black":
+                return -1.0
+            return 0.0
+        return self._result_to_value(result, "white")
 
     def _result_to_value(self, result: str, player_color: str) -> float:
         """
@@ -416,13 +461,9 @@ class OnlineLearner:
         if session is None or len(session.positions) == 0:
             return {"learned": False, "reason": "no positions recorded"}
 
-        # Determine white_value from explicit winner
-        if winner == "white":
-            white_value = 1.0
-        elif winner == "black":
-            white_value = -1.0
-        else:
-            white_value = 0.0
+        # Determine white_value from the explicit winner, falling back to the
+        # status string only if the caller did not supply one.
+        white_value = self._white_value_for(result, winner)
 
         examples = []
         for pos in session.positions:
