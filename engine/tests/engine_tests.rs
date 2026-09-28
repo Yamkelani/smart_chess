@@ -12,7 +12,7 @@
 /// - Zobrist hashing consistency
 
 use chess_engine::board::{Board, sq, square_from_name, square_name};
-use chess_engine::evaluation::{evaluate, search_best_move};
+use chess_engine::evaluation::{evaluate, search_best_move_timed};
 use chess_engine::game::{GameState, GameStatus};
 use chess_engine::moves::{generate_legal_moves, make_move, Move};
 use chess_engine::piece::{Color, Piece, PieceType};
@@ -363,7 +363,7 @@ fn search_finds_mate_in_one() {
     // White rook can deliver mate: Kh1, Ra1. Black: Kg8, pawns f7 g7 h7.
     let fen = "6k1/5ppp/8/8/8/8/8/R6K w - - 0 1";
     let board = Board::from_fen(fen).unwrap();
-    let result = search_best_move(&board, 3);
+    let result = search_best_move_timed(&board, 3, 0);
     assert!(result.is_some(), "Should find a move");
     let (best_move, _score) = result.unwrap();
     // Ra8# is the only mate
@@ -376,7 +376,7 @@ fn search_avoids_hanging_queen() {
     // White should not leave queen hanging.
     let fen = "r1bqkbnr/pppppppp/2n5/8/3Q4/8/PPP1PPPP/RNB1KBNR w KQkq - 0 1";
     let board = Board::from_fen(fen).unwrap();
-    let result = search_best_move(&board, 3);
+    let result = search_best_move_timed(&board, 3, 0);
     assert!(result.is_some());
     let (best_move, _) = result.unwrap();
     // Queen should move away from c6's attack, not stay on d4
@@ -394,7 +394,7 @@ fn search_avoids_hanging_queen() {
 #[test]
 fn search_finds_move_from_starting_position() {
     let board = Board::new();
-    let result = search_best_move(&board, 3);
+    let result = search_best_move_timed(&board, 3, 0);
     assert!(result.is_some(), "Should find a move from starting position");
 }
 
@@ -402,7 +402,7 @@ fn search_finds_move_from_starting_position() {
 fn search_returns_none_when_no_moves() {
     // Checkmate position — no legal moves
     let board = Board::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3").unwrap();
-    let result = search_best_move(&board, 3);
+    let result = search_best_move_timed(&board, 3, 0);
     assert!(result.is_none(), "Should return None in checkmate position");
 }
 

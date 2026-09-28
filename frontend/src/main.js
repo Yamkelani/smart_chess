@@ -46,6 +46,7 @@ class ChessGame {
     this.capturedBlack = []; // black pieces captured (by white)
     this.status = 'Active';
     this.winner = null;
+    this.isAnalysis = false;
     this.sideToMove = 'white';
     this.isCheck = false;
     this.playerColor = 'white';
@@ -918,6 +919,7 @@ class ChessGame {
     if (attackBtn) { attackBtn.textContent = 'Attack Map'; attackBtn.classList.remove('active'); }
     this.status = 'Active';
     this.winner = null;
+    this.isAnalysis = false;
     this.playerColor = document.getElementById('color-select').value;
     this.useAI = document.getElementById('use-ai').checked;
 
@@ -1197,6 +1199,7 @@ class ChessGame {
       this.isCheck = data.is_check;
       this.status = data.status;
       this.winner = data.winner ?? null;
+      this.isAnalysis = data.is_analysis ?? this.isAnalysis;
       this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
 
       // Let animation play, then sync pieces
@@ -1321,6 +1324,7 @@ class ChessGame {
           this.isCheck = gameData.is_check;
           this.status = gameData.status;
           this.winner = gameData.winner ?? null;
+          this.isAnalysis = gameData.is_analysis ?? this.isAnalysis;
           this.sideToMove = gameData.side_to_move;
 
           this.board.setPieces(this.pieces);
@@ -1356,6 +1360,7 @@ class ChessGame {
           this.isCheck = gameData.is_check;
           this.status = gameData.status;
           this.winner = gameData.winner ?? null;
+          this.isAnalysis = gameData.is_analysis ?? this.isAnalysis;
           this.sideToMove = gameData.side_to_move;
           const san2 = this._uciToSAN(engineResult.move_uci, prevPieces2, gameData.pieces, gameData.is_check, gameData.status, false);
           this.moveHistory.push(san2);
@@ -1460,6 +1465,7 @@ class ChessGame {
     this.isCheck = data.is_check;
     this.status = data.status;
     this.winner = data.winner ?? null;
+    this.isAnalysis = data.is_analysis ?? this.isAnalysis;
     this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
 
     // Log FEN for review
@@ -1718,9 +1724,11 @@ class ChessGame {
       let data;
       if (this.gameId) {
         try {
-          data = await this.api.setPosition(this.gameId, targetFen);
+          // Server-authoritative undo: rewinds the engine's own history so the
+          // board and move list cannot drift apart, and keeps the game rankable.
+          data = await this.api.undoMoves(this.gameId, 1);
         } catch (_e) {
-          // Fallback: create new game if set-position not available
+          // Fallback: create new game if undo is not available
           data = await this.api.newGame(targetFen);
           this.gameId = data.game_id;
         }
@@ -1802,6 +1810,7 @@ class ChessGame {
       this.isCheck = data.is_check;
       this.status = data.status;
       this.winner = data.winner ?? null;
+      this.isAnalysis = data.is_analysis ?? this.isAnalysis;
       this.sideToMove = this.moveHistory.length % 2 === 0 ? 'white' : 'black';
       this.selectedSquare = null;
 
@@ -2170,22 +2179,21 @@ class ChessGame {
       this.api.gameComplete(this.gameId, this.status, this.playerColor, this.winner);
     }
 
-    // Determine result
+    // Determine result from the structured winner rather than the display
+    // string. Parsing this.status missed resignations and flag falls entirely,
+    // scoring them as draws.
     let result = 'draw';
-    let isCheckmate = false;
-    if (this.status.includes('Checkmate')) {
-      isCheckmate = true;
-      const winner = this.sideToMove === 'white' ? 'black' : 'white';
-      result = winner === this.playerColor ? 'win' : 'loss';
-    } else if (this.status.includes('Stalemate') || this.status.includes('Draw')) {
-      result = 'draw';
+    if (this.winner === 'white' || this.winner === 'black') {
+      result = this.winner === this.playerColor ? 'win' : 'loss';
     }
+    const isCheckmate = this.status.includes('Checkmate');
 
     const difficulty = document.getElementById('difficulty-select').value;
 
-    // Update rating (skip in friendly mode)
+    // Update rating (skip in friendly mode, and for games whose position was
+    // hand-placed — those did not arise from play and must not be rated).
     let ratingResult = { change: 0, newRating: getRating().rating };
-    if (this.gameMode !== 'friendly') {
+    if (this.gameMode !== 'friendly' && !this.isAnalysis) {
       ratingResult = updateRating(result, difficulty);
       this._refreshRatingDisplay();
     }
@@ -2412,6 +2420,7 @@ class ChessGame {
       this.playerColor = this.sideToMove;
       this.status = 'Active';
       this.winner = null;
+      this.isAnalysis = false;
       this.moveHistory = [];
 
       this.board.clearHighlights();
@@ -2738,6 +2747,7 @@ class ChessGame {
       this.playerColor = this.sideToMove;
       this.status = 'Active';
       this.winner = null;
+      this.isAnalysis = false;
       this.moveHistory = [];
 
       this.board.clearHighlights();
@@ -3011,6 +3021,7 @@ class ChessGame {
       this.legalMoves = data.legal_moves;
       this.status = 'Active';
       this.winner = null;
+      this.isAnalysis = false;
       this.moveHistory = [];
       this._moveHistoryUCI = [];
       this._fenLog = [this.fen];
@@ -3163,6 +3174,7 @@ class ChessGame {
       this.playerColor = this.sideToMove;
       this.status = 'Active';
       this.winner = null;
+      this.isAnalysis = false;
       this.moveHistory = [];
       this._moveHistoryUCI = [];
       this._fenLog = [this.fen];

@@ -49,6 +49,12 @@ pub struct GameState {
     pub black_player: String,
     #[serde(default)]
     pub hash_history: Vec<u64>,        // Zobrist hashes for fast repetition detection
+    /// True once an arbitrary position has been loaded into this game.
+    ///
+    /// A hand-placed position did not arise from play, so the game must not
+    /// produce a rated result. Defaults to false so existing saved games load.
+    #[serde(default)]
+    pub is_analysis: bool,
 }
 
 impl GameState {
@@ -65,6 +71,7 @@ impl GameState {
             white_player: "human".to_string(),
             black_player: "ai".to_string(),
             hash_history: vec![initial_hash],
+            is_analysis: false,
         }
     }
 
@@ -81,6 +88,7 @@ impl GameState {
             white_player: "human".to_string(),
             black_player: "ai".to_string(),
             hash_history: vec![initial_hash],
+            is_analysis: false,
         })
     }
 
@@ -150,6 +158,65 @@ impl GameState {
             status: self.status.clone(),
             fen: self.board.to_fen(),
         })
+    }
+
+    /// Rewind `count` half-moves, restoring the position that actually occurred.
+    ///
+    /// This is the safe counterpart to `load_position`: it can only move
+    /// backwards through this game's own recorded history, so it cannot be used
+    /// to inject a position that was never played.  The board and all three
+    /// parallel histories are truncated together, keeping them consistent.
+    ///
+    /// Rewinding out of a terminal status reactivates the game, which is correct
+    /// because the earlier position genuinely was active.
+    pub fn undo_moves(&mut self, count: usize) -> Result<(), String> {
+        if count == 0 {
+            return Err("Must undo at least one move".to_string());
+        }
+        if count > self.move_history.len() {
+            return Err(format!(
+                "Cannot undo {} move(s); only {} have been played",
+                count,
+                self.move_history.len()
+            ));
+        }
+
+        let keep = self.move_history.len() - count;
+        self.move_history.truncate(keep);
+        // fen_history and hash_history carry the initial position as well, so
+        // they always hold one more entry than move_history.
+        self.fen_history.truncate(keep + 1);
+        self.hash_history.truncate(keep + 1);
+
+        let target = self
+            .fen_history
+            .last()
+            .ok_or("History is empty; cannot restore a position")?;
+        self.board = Board::from_fen(target)?;
+        self.status = GameStatus::Active;
+        Ok(())
+    }
+
+    /// Replace the position with an arbitrary one, discarding all history.
+    ///
+    /// Used for board setup and opening exploration.  Because the resulting
+    /// position did not arise from play, the game is flagged as analysis and
+    /// must not yield a rated result.  All histories are reset together so the
+    /// recorded game can never describe moves that were not played — leaving
+    /// them in place also corrupted repetition detection, because stale Zobrist
+    /// hashes from the abandoned line were still counted.
+    pub fn load_position(&mut self, fen: &str) -> Result<(), String> {
+        let board = Board::from_fen(fen)?;
+        let canonical_fen = board.to_fen();
+        let hash = hash_board(&board);
+
+        self.board = board;
+        self.move_history.clear();
+        self.fen_history = vec![canonical_fen];
+        self.hash_history = vec![hash];
+        self.status = GameStatus::Active;
+        self.is_analysis = true;
+        Ok(())
     }
 
     fn position_repetition_count(&self) -> usize {
