@@ -10,8 +10,7 @@
 /// - Evaluation sanity
 /// - Search (finds forced mates, avoids blunders)
 /// - Zobrist hashing consistency
-
-use chess_engine::board::{Board, sq, square_from_name, square_name};
+use chess_engine::board::{sq, square_from_name, square_name, Board};
 use chess_engine::evaluation::{evaluate, search_best_move_timed};
 use chess_engine::game::{GameState, GameStatus};
 use chess_engine::moves::{generate_legal_moves, make_move, Move};
@@ -62,7 +61,10 @@ fn fen_parse_invalid_too_few_parts() {
 fn new_board_is_starting_position() {
     let board = Board::new();
     let fen = board.to_fen();
-    assert_eq!(fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    assert_eq!(
+        fen,
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    );
 }
 
 #[test]
@@ -102,7 +104,11 @@ fn square_name_conversions() {
 fn starting_position_has_20_moves() {
     let board = Board::new();
     let moves = generate_legal_moves(&board);
-    assert_eq!(moves.len(), 20, "Starting position should have 20 legal moves");
+    assert_eq!(
+        moves.len(),
+        20,
+        "Starting position should have 20 legal moves"
+    );
 }
 
 #[test]
@@ -133,7 +139,10 @@ fn en_passant_capture() {
         let to_name = square_name(m.to);
         from_name == "e5" && to_name == "f6"
     });
-    assert!(ep_move.is_some(), "En passant capture e5xf6 should be legal");
+    assert!(
+        ep_move.is_some(),
+        "En passant capture e5xf6 should be legal"
+    );
 }
 
 #[test]
@@ -141,9 +150,9 @@ fn castling_kingside_white() {
     let fen = "r1bqk2r/ppppbppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
     let board = Board::from_fen(fen).unwrap();
     let moves = generate_legal_moves(&board);
-    let castle = moves.iter().find(|m| {
-        square_name(m.from) == "e1" && square_name(m.to) == "g1"
-    });
+    let castle = moves
+        .iter()
+        .find(|m| square_name(m.from) == "e1" && square_name(m.to) == "g1");
     assert!(castle.is_some(), "White should be able to castle kingside");
 }
 
@@ -153,10 +162,13 @@ fn cannot_castle_through_check() {
     let fen = "r1bqk2r/pppp1ppp/2n2n2/1b2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
     let board = Board::from_fen(fen).unwrap();
     let moves = generate_legal_moves(&board);
-    let castle = moves.iter().find(|m| {
-        square_name(m.from) == "e1" && square_name(m.to) == "g1"
-    });
-    assert!(castle.is_none(), "Cannot castle through check (f1 attacked by Bb5)");
+    let castle = moves
+        .iter()
+        .find(|m| square_name(m.from) == "e1" && square_name(m.to) == "g1");
+    assert!(
+        castle.is_none(),
+        "Cannot castle through check (f1 attacked by Bb5)"
+    );
 }
 
 #[test]
@@ -164,11 +176,14 @@ fn cannot_castle_out_of_check() {
     // Black bishop on b4, diagonal b4-c3-d2-e1 is clear → white king in check
     let fen = "rnbqk2r/pppp1ppp/5n2/4p3/1b2P3/5N2/PPP2PPP/RNBQK2R w KQkq - 4 4";
     let board = Board::from_fen(fen).unwrap();
-    assert!(board.is_in_check(), "White king should be in check from Bb4");
+    assert!(
+        board.is_in_check(),
+        "White king should be in check from Bb4"
+    );
     let moves = generate_legal_moves(&board);
-    let castle = moves.iter().find(|m| {
-        square_name(m.from) == "e1" && square_name(m.to) == "g1"
-    });
+    let castle = moves
+        .iter()
+        .find(|m| square_name(m.from) == "e1" && square_name(m.to) == "g1");
     assert!(castle.is_none(), "Cannot castle while in check");
 }
 
@@ -178,10 +193,14 @@ fn pawn_promotion_generates_all_pieces() {
     let fen = "7k/P7/8/8/8/8/8/4K3 w - - 0 1";
     let board = Board::from_fen(fen).unwrap();
     let moves = generate_legal_moves(&board);
-    let promo_moves: Vec<_> = moves.iter().filter(|m| {
-        square_name(m.from) == "a7" && square_name(m.to) == "a8"
-    }).collect();
-    assert!(promo_moves.len() >= 4, "Should generate at least 4 promotion choices (Q/R/B/N)");
+    let promo_moves: Vec<_> = moves
+        .iter()
+        .filter(|m| square_name(m.from) == "a7" && square_name(m.to) == "a8")
+        .collect();
+    assert!(
+        promo_moves.len() >= 4,
+        "Should generate at least 4 promotion choices (Q/R/B/N)"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -213,15 +232,18 @@ fn stalemate_position() {
     let fen = "k7/2Q5/1K6/8/8/8/8/8 b - - 0 1";
     let board = Board::from_fen(fen).unwrap();
     let moves = generate_legal_moves(&board);
-    assert!(!board.is_in_check(), "King should NOT be in check (stalemate)");
+    assert!(
+        !board.is_in_check(),
+        "King should NOT be in check (stalemate)"
+    );
     assert!(moves.is_empty(), "Should be stalemate (no legal moves)");
 }
 
 #[test]
 fn game_detects_checkmate() {
-    let mut game = GameState::from_fen(
-        "rnbqkbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
-    ).unwrap();
+    let mut game =
+        GameState::from_fen("rnbqkbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
+            .unwrap();
     // White is in check from Qh4. All escape attempts fail = checkmate.
     let legal = game.get_legal_moves();
     assert!(legal.is_empty(), "Should have no legal moves");
@@ -232,9 +254,7 @@ fn game_detects_stalemate_via_move() {
     // White: Kb6, Qc3. Black: Ka8.
     // After Qc7, black Ka8 has no legal moves (a7 attacked by Kb6, b8 attacked
     // by Qc7 diagonal, b7 attacked by Kb6) and is NOT in check → stalemate.
-    let mut game = GameState::from_fen(
-        "k7/8/1K6/8/8/2Q5/8/8 w - - 0 1"
-    ).unwrap();
+    let mut game = GameState::from_fen("k7/8/1K6/8/8/2Q5/8/8 w - - 0 1").unwrap();
     let result = game.make_move("c3c7").unwrap();
     assert_eq!(result.status, GameStatus::Stalemate);
 }
@@ -252,13 +272,19 @@ fn insufficient_material_k_vs_k() {
 #[test]
 fn insufficient_material_kb_vs_k() {
     let board = Board::from_fen("4k3/8/8/8/8/5B2/8/4K3 w - - 0 1").unwrap();
-    assert!(board.has_insufficient_material(), "K+B vs K is insufficient");
+    assert!(
+        board.has_insufficient_material(),
+        "K+B vs K is insufficient"
+    );
 }
 
 #[test]
 fn insufficient_material_kn_vs_k() {
     let board = Board::from_fen("4k3/8/8/8/8/5N2/8/4K3 w - - 0 1").unwrap();
-    assert!(board.has_insufficient_material(), "K+N vs K is insufficient");
+    assert!(
+        board.has_insufficient_material(),
+        "K+N vs K is insufficient"
+    );
 }
 
 #[test]
@@ -271,40 +297,53 @@ fn insufficient_material_kb_vs_kb_same_color() {
     let w_color = (w_sq / 8 + w_sq % 8) % 2;
     let b_color = (b_sq / 8 + b_sq % 8) % 2;
     if w_color == b_color {
-        assert!(board.has_insufficient_material(), "K+B vs K+B same color = insufficient");
+        assert!(
+            board.has_insufficient_material(),
+            "K+B vs K+B same color = insufficient"
+        );
     }
 }
 
 #[test]
 fn sufficient_material_kr_vs_k() {
     let board = Board::from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1").unwrap();
-    assert!(!board.has_insufficient_material(), "K+R vs K has sufficient material");
+    assert!(
+        !board.has_insufficient_material(),
+        "K+R vs K has sufficient material"
+    );
 }
 
 #[test]
 fn sufficient_material_with_pawns() {
     let board = Board::from_fen("4k3/p7/8/8/8/8/P7/4K3 w - - 0 1").unwrap();
-    assert!(!board.has_insufficient_material(), "Pawns = sufficient material");
+    assert!(
+        !board.has_insufficient_material(),
+        "Pawns = sufficient material"
+    );
 }
 
 #[test]
 fn fifty_move_rule_is_claim_not_auto() {
-    let mut game = GameState::from_fen(
-        "8/8/3k4/8/8/3K4/8/3R4 w - - 99 1"
-    ).unwrap();
+    let mut game = GameState::from_fen("8/8/3k4/8/8/3K4/8/3R4 w - - 99 1").unwrap();
     // FIDE 9.3: 50-move is a claim, not automatic. Game stays Active at 100 half-moves.
     let result = game.make_move("d3e3").unwrap();
-    assert_eq!(result.status, GameStatus::Active, "50-move should be claimable, not auto-draw");
+    assert_eq!(
+        result.status,
+        GameStatus::Active,
+        "50-move should be claimable, not auto-draw"
+    );
 }
 
 #[test]
 fn seventy_five_move_rule_auto_draw() {
-    let mut game = GameState::from_fen(
-        "8/8/3k4/8/8/3K4/8/3R4 w - - 149 1"
-    ).unwrap();
+    let mut game = GameState::from_fen("8/8/3k4/8/8/3K4/8/3R4 w - - 149 1").unwrap();
     // FIDE 9.6.2: 75-move rule is automatic at 150 half-moves
     let result = game.make_move("d3e3").unwrap();
-    assert_eq!(result.status, GameStatus::Draw, "Should be auto-draw at 75 moves");
+    assert_eq!(
+        result.status,
+        GameStatus::Draw,
+        "Should be auto-draw at 75 moves"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -315,39 +354,68 @@ fn seventy_five_move_rule_auto_draw() {
 fn starting_position_roughly_equal() {
     let board = Board::new();
     let score = evaluate(&board);
-    assert!(score.abs() < 50, "Starting position should be roughly equal, got {}", score);
+    assert!(
+        score.abs() < 50,
+        "Starting position should be roughly equal, got {}",
+        score
+    );
 }
 
 #[test]
 fn white_queen_up_is_positive() {
     // White has an extra queen
-    let board = Board::from_fen("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
+    let board =
+        Board::from_fen("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
     let score = evaluate(&board);
-    assert!(score > 500, "Extra queen for white should give score > 500, got {}", score);
+    assert!(
+        score > 500,
+        "Extra queen for white should give score > 500, got {}",
+        score
+    );
 }
 
 #[test]
 fn black_queen_up_is_negative() {
     // Black has an extra queen (white missing queen)
-    let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1").unwrap();
+    let board =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1").unwrap();
     let score = evaluate(&board);
-    assert!(score < -500, "Extra queen for black should give negative score, got {}", score);
+    assert!(
+        score < -500,
+        "Extra queen for black should give negative score, got {}",
+        score
+    );
 }
 
 #[test]
 fn evaluation_symmetry() {
     // evaluate() returns score relative to side-to-move (positive = good for side to move).
     // Board where black is missing a knight (white advantage), white to move:
-    let w_board = Board::from_fen("rnbqkb1r/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
+    let w_board =
+        Board::from_fen("rnbqkb1r/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
     let w_score = evaluate(&w_board);
     // Board where white is missing a knight (black advantage), black to move:
-    let b_board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKB1R b KQkq - 0 1").unwrap();
+    let b_board =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKB1R b KQkq - 0 1").unwrap();
     let b_score = evaluate(&b_board);
     // Both scores should be positive (each side has advantage and it's their move)
-    assert!(w_score > 0, "White advantage + white to move should be positive, got {}", w_score);
-    assert!(b_score > 0, "Black advantage + black to move should be positive, got {}", b_score);
+    assert!(
+        w_score > 0,
+        "White advantage + white to move should be positive, got {}",
+        w_score
+    );
+    assert!(
+        b_score > 0,
+        "Black advantage + black to move should be positive, got {}",
+        b_score
+    );
     // Scores should be similar in magnitude (symmetric positions)
-    assert!((w_score - b_score).abs() < 100, "Symmetric positions should have similar scores: w={} b={}", w_score, b_score);
+    assert!(
+        (w_score - b_score).abs() < 100,
+        "Symmetric positions should have similar scores: w={} b={}",
+        w_score,
+        b_score
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -367,7 +435,11 @@ fn search_finds_mate_in_one() {
     assert!(result.is_some(), "Should find a move");
     let (best_move, _score) = result.unwrap();
     // Ra8# is the only mate
-    assert_eq!(square_name(best_move.to), "a8", "Should find Ra8# (back-rank mate)");
+    assert_eq!(
+        square_name(best_move.to),
+        "a8",
+        "Should find Ra8# (back-rank mate)"
+    );
 }
 
 #[test]
@@ -387,7 +459,8 @@ fn search_avoids_hanging_queen() {
     assert!(
         from_sq == "d4" || true,
         "Engine should move the queen or play a good move; played {}{}",
-        from_sq, to_sq
+        from_sq,
+        to_sq
     );
 }
 
@@ -395,13 +468,17 @@ fn search_avoids_hanging_queen() {
 fn search_finds_move_from_starting_position() {
     let board = Board::new();
     let result = search_best_move_timed(&board, 3, 0);
-    assert!(result.is_some(), "Should find a move from starting position");
+    assert!(
+        result.is_some(),
+        "Should find a move from starting position"
+    );
 }
 
 #[test]
 fn search_returns_none_when_no_moves() {
     // Checkmate position — no legal moves
-    let board = Board::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3").unwrap();
+    let board =
+        Board::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3").unwrap();
     let result = search_best_move_timed(&board, 3, 0);
     assert!(result.is_none(), "Should return None in checkmate position");
 }
@@ -420,13 +497,16 @@ fn zobrist_same_position_same_hash() {
 #[test]
 fn zobrist_different_positions_different_hash() {
     let board1 = Board::new();
-    let board2 = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
+    let board2 =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
     assert_ne!(hash_board(&board1), hash_board(&board2));
 }
 
 #[test]
 fn zobrist_fen_roundtrip_same_hash() {
-    let original = Board::from_fen("r1bqkb1r/pppppppp/2n2n2/8/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3").unwrap();
+    let original =
+        Board::from_fen("r1bqkb1r/pppppppp/2n2n2/8/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3")
+            .unwrap();
     let fen = original.to_fen();
     let restored = Board::from_fen(&fen).unwrap();
     assert_eq!(hash_board(&original), hash_board(&restored));
@@ -434,23 +514,28 @@ fn zobrist_fen_roundtrip_same_hash() {
 
 #[test]
 fn zobrist_castling_rights_matter() {
-    let with_castling = Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
+    let with_castling =
+        Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1").unwrap();
     let no_castling = Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w - - 0 1").unwrap();
     assert_ne!(hash_board(&with_castling), hash_board(&no_castling));
 }
 
 #[test]
 fn zobrist_side_to_move_matters() {
-    let white_to_move = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1").unwrap();
+    let white_to_move =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1").unwrap();
     // Same position but after removing en-passant to isolate side-to-move effect
-    let black_to_move = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
+    let black_to_move =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
     assert_ne!(hash_board(&white_to_move), hash_board(&black_to_move));
 }
 
 #[test]
 fn zobrist_en_passant_matters() {
-    let with_ep = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
-    let no_ep = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
+    let with_ep =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
+    let no_ep =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
     assert_ne!(hash_board(&with_ep), hash_board(&no_ep));
 }
 
@@ -480,14 +565,14 @@ fn game_illegal_move_rejected() {
 #[test]
 fn game_move_after_checkmate_rejected() {
     // Set up a checkmated position
-    let mut game = GameState::from_fen(
-        "rnbqkbnr/ppppp1pp/8/5p2/4P3/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 2"
-    ).unwrap();
+    let mut game =
+        GameState::from_fen("rnbqkbnr/ppppp1pp/8/5p2/4P3/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 2")
+            .unwrap();
     let _ = game.make_move("d1h5"); // Qh5+ (check, possibly mate depending on exact position)
-    // Use a direct checkmate position instead
-    let mut game2 = GameState::from_fen(
-        "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
-    ).unwrap();
+                                    // Use a direct checkmate position instead
+    let mut game2 =
+        GameState::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
+            .unwrap();
     // This is already checkmate — white has no legal moves and is in check
     let result = game2.make_move("e2e4");
     assert!(result.is_err(), "Should not allow moves after checkmate");
@@ -523,9 +608,14 @@ fn game_check_flag() {
 
 #[test]
 fn perft_after_e4() {
-    let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
+    let board =
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1").unwrap();
     let moves = generate_legal_moves(&board);
-    assert_eq!(moves.len(), 20, "After 1.e4, black should have 20 legal moves");
+    assert_eq!(
+        moves.len(),
+        20,
+        "After 1.e4, black should have 20 legal moves"
+    );
 }
 
 #[test]
@@ -540,8 +630,16 @@ fn king_moves_limited_by_attacks() {
     // But need to check if any of d5,e5,f5,d3,e3,f3 are attacked
     // The king definitely can't stay on e4 or go to d4/f4
     for mv in &moves {
-        assert_ne!(square_name(mv.to), "d4", "King should not move to d4 (attacked by rook)");
-        assert_ne!(square_name(mv.to), "f4", "King should not move to f4 (attacked by rook)");
+        assert_ne!(
+            square_name(mv.to),
+            "d4",
+            "King should not move to d4 (attacked by rook)"
+        );
+        assert_ne!(
+            square_name(mv.to),
+            "f4",
+            "King should not move to f4 (attacked by rook)"
+        );
     }
 }
 
@@ -564,5 +662,9 @@ fn threefold_repetition_detected() {
     game.make_move("f3g1").unwrap();
     let result = game.make_move("f6g8").unwrap();
     // Position has now occurred 3 times → draw
-    assert_eq!(result.status, GameStatus::Draw, "Should be draw by threefold repetition");
+    assert_eq!(
+        result.status,
+        GameStatus::Draw,
+        "Should be draw by threefold repetition"
+    );
 }

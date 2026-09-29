@@ -3,7 +3,6 @@
 /// Generates random 64-bit keys for every (piece, color, square) combination
 /// plus castling rights, en-passant file, and side to move.  These are XOR-ed
 /// together to produce a position hash that can be incrementally updated.
-
 use crate::board::Board;
 use crate::piece::Color;
 
@@ -33,27 +32,28 @@ impl ZobristKeys {
         };
 
         let mut pieces = [[[0u64; 64]; 6]; 2];
-        for c in 0..2 {
-            for p in 0..6 {
-                for sq in 0..64 {
-                    pieces[c][p][sq] = next();
-                }
-            }
+        for key in pieces.iter_mut().flatten().flatten() {
+            *key = next();
         }
 
         let mut castling = [0u64; 16];
-        for i in 0..16 {
-            castling[i] = next();
+        for key in castling.iter_mut() {
+            *key = next();
         }
 
         let mut en_passant = [0u64; 9];
-        for i in 0..9 {
-            en_passant[i] = next();
+        for key in en_passant.iter_mut() {
+            *key = next();
         }
 
         let side = next();
 
-        Self { pieces, castling, en_passant, side }
+        Self {
+            pieces,
+            castling,
+            en_passant,
+            side,
+        }
     }
 }
 
@@ -86,7 +86,8 @@ pub fn hash_board(board: &Board) -> u64 {
     h ^= ZOBRIST.castling[ci];
 
     // En-passant file (0–7) or 8 for none
-    let ep_idx = board.en_passant_square
+    let ep_idx = board
+        .en_passant_square
         .map(|sq| (sq % 8) as usize)
         .unwrap_or(8);
     h ^= ZOBRIST.en_passant[ep_idx];

@@ -7,10 +7,10 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum GameStatus {
     Active,
-    Checkmate(String),   // Winner color
+    Checkmate(String), // Winner color
     Stalemate,
-    Draw,                // By repetition, 50-move rule, etc.
-    Resigned(String),    // Color that resigned
+    Draw,             // By repetition, 50-move rule, etc.
+    Resigned(String), // Color that resigned
 }
 
 impl GameStatus {
@@ -43,18 +43,24 @@ pub struct GameState {
     pub id: String,
     pub board: Board,
     pub status: GameStatus,
-    pub move_history: Vec<String>,     // UCI move strings
-    pub fen_history: Vec<String>,      // FEN after each move
+    pub move_history: Vec<String>, // UCI move strings
+    pub fen_history: Vec<String>,  // FEN after each move
     pub white_player: String,
     pub black_player: String,
     #[serde(default)]
-    pub hash_history: Vec<u64>,        // Zobrist hashes for fast repetition detection
+    pub hash_history: Vec<u64>, // Zobrist hashes for fast repetition detection
     /// True once an arbitrary position has been loaded into this game.
     ///
     /// A hand-placed position did not arise from play, so the game must not
     /// produce a rated result. Defaults to false so existing saved games load.
     #[serde(default)]
     pub is_analysis: bool,
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GameState {
@@ -136,15 +142,11 @@ impl GameState {
             } else {
                 self.status = GameStatus::Stalemate;
             }
-        } else if self.board.halfmove_clock >= 150 {
-            // FIDE 9.6.2: automatic draw at 75 moves (150 half-moves)
-            self.status = GameStatus::Draw;
-        } else if self.is_fivefold_repetition() {
-            // FIDE 9.6.1: automatic draw at 5 repetitions
-            self.status = GameStatus::Draw;
-        } else if self.is_threefold_repetition() {
-            self.status = GameStatus::Draw;
-        } else if self.board.has_insufficient_material() {
+        } else if self.board.halfmove_clock >= 150 // FIDE 9.6.2: automatic draw at 75 moves (150 half-moves)
+            || self.is_fivefold_repetition() // FIDE 9.6.1: automatic draw at 5 repetitions
+            || self.is_threefold_repetition()
+            || self.board.has_insufficient_material()
+        {
             self.status = GameStatus::Draw;
         }
 
@@ -231,11 +233,18 @@ impl GameState {
             return 1;
         }
         let current = &self.fen_history[self.fen_history.len() - 1];
-        let current_pos: String = current.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
-        self.fen_history.iter().filter(|fen| {
-            let pos: String = fen.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
-            pos == current_pos
-        }).count()
+        let current_pos: String = current
+            .split_whitespace()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.fen_history
+            .iter()
+            .filter(|fen| {
+                let pos: String = fen.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
+                pos == current_pos
+            })
+            .count()
     }
 
     fn is_threefold_repetition(&self) -> bool {
