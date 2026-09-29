@@ -161,13 +161,13 @@ class ChessNetManager:
                 checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=True)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 self.generation = checkpoint.get('generation', 0)
-                print(f"✓ Loaded model (generation {self.generation}) from {self.model_path}")
+                print(f"Loaded model (generation {self.generation}) from {self.model_path}")
                 return True
             except Exception as e:  # noqa: BLE001 - any unreadable checkpoint means start fresh
-                print(f"⚠ Failed to load model: {e}. Starting fresh.")
+                print(f"WARNING: failed to load model: {e}. Starting fresh.")
                 return False
         else:
-            print("ℹ No existing model found. Starting with random weights.")
+            print("No existing model found. Starting with random weights.")
             return False
     
     def save_model(self):
@@ -182,7 +182,7 @@ class ChessNetManager:
         # Also save a versioned copy
         versioned_path = os.path.join(MODEL_DIR, f"chess_nn_gen{self.generation}.pth")
         torch.save(checkpoint, versioned_path)
-        print(f"✓ Saved model (generation {self.generation}) to {self.model_path}")
+        print(f"Saved model (generation {self.generation}) to {self.model_path}")
     
     def predict(self, board_tensor):
         """Run inference on a board position."""
