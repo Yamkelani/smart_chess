@@ -4749,7 +4749,7 @@ class ChessGame {
                   ${entries.slice(0, 50).map((e, i) => `
                     <tr style="border-bottom:1px solid rgba(100,120,255,0.05)">
                       <td style="padding:6px;color:${i < 3 ? 'var(--accent-gold)' : 'var(--text-muted)'}">${i + 1}</td>
-                      <td style="padding:6px;font-weight:${i < 3 ? 600 : 400}">${e.player_name}</td>
+                      <td style="padding:6px;font-weight:${i < 3 ? 600 : 400}">${this._escapeHtml(e.player_name)}</td>
                       <td style="padding:6px;text-align:right;color:var(--accent-cyan)">${e.rating}</td>
                       <td style="padding:6px;text-align:right;font-size:0.75rem;color:var(--text-secondary)">${e.wins}/${e.losses}/${e.draws}</td>
                     </tr>
