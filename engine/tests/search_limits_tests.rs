@@ -39,7 +39,10 @@ fn best_move_search_respects_its_time_budget() {
     let result = search_best_move_timed(&board, 99, budget_ms);
     let elapsed = start.elapsed();
 
-    assert!(result.is_some(), "a legal move must still be returned on timeout");
+    assert!(
+        result.is_some(),
+        "a legal move must still be returned on timeout"
+    );
     // Generous ceiling: the limit is checked every 2048 nodes, so overshoot is
     // expected — but it must be bounded, not open-ended.
     assert!(
@@ -57,7 +60,10 @@ fn top_moves_search_respects_its_time_budget() {
     let moves = search_top_moves_timed(&board, 99, 3, budget_ms);
     let elapsed = start.elapsed();
 
-    assert!(!moves.is_empty(), "analysis must still return moves on timeout");
+    assert!(
+        !moves.is_empty(),
+        "analysis must still return moves on timeout"
+    );
     assert!(
         elapsed < Duration::from_millis(budget_ms * 10),
         "depth-99 multi-PV search with a {budget_ms}ms budget took {elapsed:?}"

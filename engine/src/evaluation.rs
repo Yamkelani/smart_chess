@@ -711,9 +711,7 @@ impl PvDeadline {
             return;
         }
         self.nodes += 1;
-        if self.nodes & 2047 == 0
-            && self.start.elapsed().as_millis() as u64 >= self.time_limit_ms
-        {
+        if self.nodes & 2047 == 0 && self.start.elapsed().as_millis() as u64 >= self.time_limit_ms {
             self.stopped = true;
         }
     }
