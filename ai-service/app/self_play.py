@@ -6,20 +6,20 @@ guided by the current neural network. The resulting game data
 (positions, policy targets, value targets) feeds the training loop.
 """
 
-import chess
-import numpy as np
-import time
 import os
-import json
 import pickle
-from typing import List, Tuple, Dict
+import time
 from dataclasses import dataclass, field
 
+import chess
+import numpy as np
+
+from app.chess_env import MOVES_PER_SQUARE, board_to_tensor, move_to_index
 from app.config import (
-    TRAINING_GAMES_PER_ITERATION, MCTS_SIMULATIONS,
-    MCTS_TEMPERATURE, TRAINING_DATA_DIR
+    MCTS_SIMULATIONS,
+    MCTS_TEMPERATURE,
+    TRAINING_GAMES_PER_ITERATION,
 )
-from app.chess_env import board_to_tensor, move_to_index, MOVES_PER_SQUARE
 from app.mcts import MCTS
 
 
@@ -34,7 +34,7 @@ class TrainingExample:
 @dataclass
 class GameRecord:
     """Complete record of a self-play game."""
-    examples: List[TrainingExample] = field(default_factory=list)
+    examples: list[TrainingExample] = field(default_factory=list)
     result: str = "*"
     num_moves: int = 0
     duration: float = 0.0
@@ -63,7 +63,7 @@ class SelfPlay:
             add_noise=True  # Exploration noise for self-play
         )
 
-        move_history: List[Tuple[np.ndarray, np.ndarray, int]] = []
+        move_history: list[tuple[np.ndarray, np.ndarray, int]] = []
         # store: (board_tensor, policy_target, current_player)
         # where current_player: 1 = white, -1 = black
 
@@ -120,7 +120,7 @@ class SelfPlay:
         return record
 
     def generate_games(self, num_games: int = TRAINING_GAMES_PER_ITERATION,
-                       callback=None) -> List[GameRecord]:
+                       callback=None) -> list[GameRecord]:
         """
         Generate multiple self-play games.
 
@@ -163,7 +163,7 @@ class ReplayBuffer:
 
     def __init__(self, max_size: int = 50000):
         self.max_size = max_size
-        self.buffer: List[TrainingExample] = []
+        self.buffer: list[TrainingExample] = []
 
     def add_game(self, record: GameRecord):
         """Add all training examples from a game."""
@@ -172,12 +172,12 @@ class ReplayBuffer:
         if len(self.buffer) > self.max_size:
             self.buffer = self.buffer[-self.max_size:]
 
-    def add_games(self, records: List[GameRecord]):
+    def add_games(self, records: list[GameRecord]):
         """Add training examples from multiple games."""
         for record in records:
             self.add_game(record)
 
-    def sample(self, batch_size: int) -> List[TrainingExample]:
+    def sample(self, batch_size: int) -> list[TrainingExample]:
         """Sample a random batch of training examples."""
         indices = np.random.choice(len(self.buffer), size=min(batch_size, len(self.buffer)), replace=False)
         return [self.buffer[i] for i in indices]
@@ -205,7 +205,7 @@ class ReplayBuffer:
                 self.max_size = data.get('max_size', self.max_size)
                 print(f"Loaded replay buffer ({len(self.buffer)} examples) from {path}")
                 return True
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - any unreadable buffer means start empty
                 print(f"Failed to load replay buffer: {e}")
                 return False
         return False

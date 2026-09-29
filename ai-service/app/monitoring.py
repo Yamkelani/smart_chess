@@ -9,20 +9,17 @@ Tracks model performance over time:
   - ELO estimation from game outcomes
 """
 
-import os
 import json
-import time
-import math
+import os
 import threading
+import time
+from dataclasses import dataclass
+
 import chess
 import numpy as np
 import torch
-from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Tuple
-from collections import deque
 
-from app.config import MODEL_DIR, TRAINING_DATA_DIR
-
+from app.config import TRAINING_DATA_DIR
 
 # ---- Persistence helpers ----
 
@@ -100,7 +97,7 @@ class DriftReport:
 # A curated set of positions with known best moves for evaluation.
 # Sourced from classic tactical puzzles.
 
-BENCHMARK_POSITIONS: List[Dict] = [
+BENCHMARK_POSITIONS: list[dict] = [
     # Mate in 1
     {"fen": "6k1/5ppp/8/8/8/8/1Q6/K7 w - - 0 1", "best_move": "b2g7",
      "description": "Queen delivers mate on g7"},
@@ -146,11 +143,11 @@ class ModelMonitor:
         self._lock = threading.Lock()
 
         # In-memory stores (also persisted)
-        self.loss_history: List[dict] = []
-        self.game_outcomes: List[dict] = []
-        self.eval_history: List[dict] = []
-        self.drift_reports: List[dict] = []
-        self.alerts: List[dict] = []
+        self.loss_history: list[dict] = []
+        self.game_outcomes: list[dict] = []
+        self.eval_history: list[dict] = []
+        self.drift_reports: list[dict] = []
+        self.alerts: list[dict] = []
 
         # Aggregated counters
         self.total_games = 0
@@ -160,7 +157,7 @@ class ModelMonitor:
 
         # ELO tracking (start at 1200)
         self.elo_rating = 1200.0
-        self.elo_history: List[dict] = []
+        self.elo_history: list[dict] = []
 
         self._load()
         print(f"[Monitor] initialized — {len(self.loss_history)} loss entries, "
@@ -238,7 +235,7 @@ class ModelMonitor:
         self._save_outcomes()
 
     @staticmethod
-    def _extract_winner(result: str) -> Optional[str]:
+    def _extract_winner(result: str) -> str | None:
         """Extract winner color from engine status strings like 'Checkmate(white)'
         or 'Resigned(black)'.  Returns 'white', 'black', or None."""
         import re
@@ -248,7 +245,7 @@ class ModelMonitor:
         return None
 
     def record_game_with_winner(self, game_id: str, result: str,
-                                 winner: Optional[str], player_color: str,
+                                 winner: str | None, player_color: str,
                                  num_moves: int, generation: int):
         """Record game with explicit winner info for accurate tracking."""
         ai_color = "black" if player_color == "white" else "white"
@@ -376,7 +373,7 @@ class ModelMonitor:
         self._save_drift()
         return report
 
-    def _win_rate(self, outcomes: List[dict]) -> float:
+    def _win_rate(self, outcomes: list[dict]) -> float:
         if not outcomes:
             return 0.0
         wins = sum(1 for o in outcomes if o["result"] == "win")
@@ -391,7 +388,7 @@ class ModelMonitor:
         Tests the model's policy head (does it find the best move?)
         and value head (reasonable position assessment).
         """
-        from app.chess_env import board_to_tensor, index_to_move, MOVES_PER_SQUARE
+        from app.chess_env import board_to_tensor, index_to_move
 
         model.eval()
         correct = 0
@@ -435,7 +432,7 @@ class ModelMonitor:
                 # values, so we track the raw output for trending.
                 value_errors.append(abs(value))
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - skip a bad position, keep evaluating the rest
                 print(f"[Monitor] eval error on {pos['fen'][:20]}...: {e}")
                 continue
 
@@ -535,7 +532,7 @@ class ModelMonitor:
         latest_eval = evals[-1] if evals else None
 
         # Games per generation
-        gen_games: Dict[int, int] = {}
+        gen_games: dict[int, int] = {}
         for o in outcomes:
             g = o.get("generation", 0)
             gen_games[g] = gen_games.get(g, 0) + 1
@@ -561,12 +558,12 @@ class ModelMonitor:
             "eval_history": evals[-10:],
         }
 
-    def get_loss_history(self, limit: int = 100) -> List[dict]:
+    def get_loss_history(self, limit: int = 100) -> list[dict]:
         """Return recent loss history."""
         with self._lock:
             return list(self.loss_history[-limit:])
 
-    def get_win_rate_trend(self, window: int = 10) -> List[dict]:
+    def get_win_rate_trend(self, window: int = 10) -> list[dict]:
         """
         Compute a rolling win-rate over time.
 

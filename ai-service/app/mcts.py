@@ -6,18 +6,24 @@ with neural network guidance for move selection.
 """
 
 import math
-import numpy as np
-import chess
-import torch
-from typing import Optional, Dict, Tuple, List
+from typing import Optional
 
-from app.config import (
-    MCTS_SIMULATIONS, MCTS_C_PUCT, MCTS_TEMPERATURE,
-    MCTS_TEMP_THRESHOLD, MCTS_DIRICHLET_ALPHA, MCTS_DIRICHLET_EPSILON
-)
+import chess
+import numpy as np
+import torch
+
 from app.chess_env import (
-    board_to_tensor, move_to_index, index_to_move,
-    get_legal_move_mask, MOVES_PER_SQUARE
+    board_to_tensor,
+    get_legal_move_mask,
+    move_to_index,
+)
+from app.config import (
+    MCTS_C_PUCT,
+    MCTS_DIRICHLET_ALPHA,
+    MCTS_DIRICHLET_EPSILON,
+    MCTS_SIMULATIONS,
+    MCTS_TEMP_THRESHOLD,
+    MCTS_TEMPERATURE,
 )
 
 
@@ -25,17 +31,22 @@ class MCTSNode:
     """A node in the MCTS search tree."""
 
     __slots__ = [
-        'parent', 'move', 'prior', 'children',
-        'visit_count', 'value_sum', 'is_expanded'
+        'children',
+        'is_expanded',
+        'move',
+        'parent',
+        'prior',
+        'value_sum',
+        'visit_count'
     ]
 
     def __init__(self, parent: Optional['MCTSNode'] = None,
-                 move: Optional[chess.Move] = None,
+                 move: chess.Move | None = None,
                  prior: float = 0.0):
         self.parent = parent
         self.move = move
         self.prior = prior
-        self.children: Dict[chess.Move, 'MCTSNode'] = {}
+        self.children: dict[chess.Move, MCTSNode] = {}
         self.visit_count = 0
         self.value_sum = 0.0
         self.is_expanded = False
@@ -130,7 +141,7 @@ class MCTS:
         self.num_simulations = num_simulations
         self.add_noise = add_noise
 
-    def _evaluate(self, board: chess.Board) -> Tuple[np.ndarray, float]:
+    def _evaluate(self, board: chess.Board) -> tuple[np.ndarray, float]:
         """
         Evaluate a position using the neural network.
 
@@ -208,7 +219,7 @@ class MCTS:
 
     def get_action_probs(self, board: chess.Board,
                          temperature: float = MCTS_TEMPERATURE,
-                         move_number: int = 0) -> List[Tuple[chess.Move, float]]:
+                         move_number: int = 0) -> list[tuple[chess.Move, float]]:
         """
         Run MCTS and return move probabilities.
 
@@ -249,7 +260,7 @@ class MCTS:
 
     def select_move(self, board: chess.Board,
                     temperature: float = MCTS_TEMPERATURE,
-                    move_number: int = 0) -> Tuple[chess.Move, List[Tuple[chess.Move, float]]]:
+                    move_number: int = 0) -> tuple[chess.Move, list[tuple[chess.Move, float]]]:
         """
         Select a move using MCTS.
 

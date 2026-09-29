@@ -7,27 +7,32 @@ Supports iterative training: self-play → train → self-play → train → ...
 
 import os
 import time
+
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from typing import List, Optional
+from torch import optim
+from torch.utils.data import DataLoader, Dataset
 
 from app.config import (
-    TRAINING_BATCH_SIZE, TRAINING_LEARNING_RATE, TRAINING_WEIGHT_DECAY,
-    TRAINING_EPOCHS, TRAINING_GAMES_PER_ITERATION, TRAINING_BUFFER_SIZE,
-    TRAINING_MIN_BUFFER, MCTS_SIMULATIONS, TRAINING_DATA_DIR, MODEL_DIR
+    MCTS_SIMULATIONS,
+    TRAINING_BATCH_SIZE,
+    TRAINING_BUFFER_SIZE,
+    TRAINING_DATA_DIR,
+    TRAINING_EPOCHS,
+    TRAINING_GAMES_PER_ITERATION,
+    TRAINING_LEARNING_RATE,
+    TRAINING_MIN_BUFFER,
+    TRAINING_WEIGHT_DECAY,
 )
 from app.model import ChessNetManager
-from app.self_play import SelfPlay, ReplayBuffer, TrainingExample
+from app.self_play import ReplayBuffer, SelfPlay, TrainingExample
 
 
 class ChessDataset(Dataset):
     """PyTorch Dataset wrapping a list of TrainingExamples."""
 
-    def __init__(self, examples: List[TrainingExample]):
+    def __init__(self, examples: list[TrainingExample]):
         self.examples = examples
 
     def __len__(self):
@@ -114,7 +119,7 @@ class Trainer:
 
     def train(self, replay_buffer: ReplayBuffer,
               epochs: int = TRAINING_EPOCHS,
-              batch_size: int = TRAINING_BATCH_SIZE) -> List[dict]:
+              batch_size: int = TRAINING_BATCH_SIZE) -> list[dict]:
         """
         Train the model on data from the replay buffer.
 
@@ -160,7 +165,7 @@ class TrainingPipeline:
     4. Repeat
     """
 
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: str | None = None):
         self.manager = ChessNetManager(device=device)
         self.trainer = Trainer(self.manager)
         self.replay_buffer = ReplayBuffer(max_size=TRAINING_BUFFER_SIZE)
@@ -191,7 +196,7 @@ class TrainingPipeline:
         self.replay_buffer.add_games(records)
 
         # Phase 2: Training
-        print(f"\n--- Phase 2: Training ---")
+        print("\n--- Phase 2: Training ---")
         metrics = self.trainer.train(self.replay_buffer)
 
         # Phase 3: Save
@@ -213,7 +218,7 @@ class TrainingPipeline:
             num_games: int = TRAINING_GAMES_PER_ITERATION,
             num_simulations: int = MCTS_SIMULATIONS):
         """Run the full training loop for multiple iterations."""
-        print(f"Starting AlphaZero training pipeline")
+        print("Starting AlphaZero training pipeline")
         print(f"Iterations: {num_iterations}")
         print(f"Games per iteration: {num_games}")
         print(f"MCTS simulations: {num_simulations}")
@@ -226,7 +231,7 @@ class TrainingPipeline:
                 print(f"\nTraining interrupted at iteration {i}")
                 self.manager.save_model()
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - log the failed iteration and keep training
                 print(f"\nError in iteration {i}: {e}")
                 import traceback
                 traceback.print_exc()
