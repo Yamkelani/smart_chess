@@ -8,11 +8,14 @@ pydantic==2.10.3
 
 # Machine Learning (CPU-only for smaller image)
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.1.0
-numpy>=1.24.0
+torch==2.5.1+cpu
+numpy>=1.24.0,<2.0.0
 
 # Chess
 python-chess==1.999
 
 # Utilities
 python-dotenv==1.0.1
+
+# Monitoring / Observability
+prometheus-client==0.21.1

@@ -1,9 +1,14 @@
 [package]
 name = "chess-engine"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
-description = "High-performance chess engine with bitboard representation"
+description = "High-performance chess engine with bitboard + mailbox representation, alpha-beta search, Chess960, and multiplayer"
 authors = ["3D Chess Team"]
+license = "MIT"
+repository = "https://github.com/Yamkelani/smart_chess"
+homepage = "https://github.com/Yamkelani/smart_chess"
+keywords = ["chess", "engine", "bitboard", "alpha-beta"]
+categories = ["games"]
 
 [lib]
 name = "chess_engine"

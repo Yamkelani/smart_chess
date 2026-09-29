@@ -5,11 +5,11 @@ use std::sync::Mutex;
 
 use crate::attacks;
 use crate::board::Board;
+use crate::chess960;
 use crate::evaluation::{evaluate, search_best_move, search_top_moves};
 use crate::game::{GameState, GameStatus};
 use crate::moves::generate_legal_moves;
 use crate::persistence;
-use crate::chess960;
 use crate::variants;
 
 /// Maximum number of games to keep in memory.  When exceeded, the oldest
@@ -25,9 +25,11 @@ macro_rules! lock_games {
     ($data:expr) => {
         match $data.games.lock() {
             Ok(guard) => guard,
-            Err(_) => return HttpResponse::InternalServerError().json(ErrorResponse {
-                error: "Internal lock error".to_string(),
-            }),
+            Err(_) => {
+                return HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "Internal lock error".to_string(),
+                })
+            }
         }
     };
 }
@@ -38,14 +40,15 @@ fn evict_old_games(games: &mut HashMap<String, GameState>) {
         return;
     }
     // Remove games that are finished first, then oldest by fullmove_number
-    let mut ids: Vec<(String, bool, u32)> = games.iter().map(|(id, g)| {
-        let is_active = g.status == crate::game::GameStatus::Active;
-        (id.clone(), is_active, g.board.fullmove_number)
-    }).collect();
+    let mut ids: Vec<(String, bool, u32)> = games
+        .iter()
+        .map(|(id, g)| {
+            let is_active = g.status == crate::game::GameStatus::Active;
+            (id.clone(), is_active, g.board.fullmove_number)
+        })
+        .collect();
     // Sort: finished first, then by lowest move number (oldest)
-    ids.sort_by(|a, b| {
-        a.1.cmp(&b.1).then(a.2.cmp(&b.2))
-    });
+    ids.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
     let to_remove = games.len() - MAX_GAMES;
     for (id, _, _) in ids.into_iter().take(to_remove) {
         games.remove(&id);
@@ -190,15 +193,17 @@ fn validate_fen(fen: &str) -> Result<(), String> {
     // Validate piece placement: must have exactly 8 ranks
     let ranks: Vec<&str> = parts[0].split('/').collect();
     if ranks.len() != 8 {
-        return Err(format!("FEN piece placement must have 8 ranks, got {}", ranks.len()));
+        return Err(format!(
+            "FEN piece placement must have 8 ranks, got {}",
+            ranks.len()
+        ));
     }
     for rank in &ranks {
         let mut count = 0u8;
         for ch in rank.chars() {
             match ch {
                 '1'..='8' => count += ch as u8 - b'0',
-                'p' | 'n' | 'b' | 'r' | 'q' | 'k' |
-                'P' | 'N' | 'B' | 'R' | 'Q' | 'K' => count += 1,
+                'p' | 'n' | 'b' | 'r' | 'q' | 'k' | 'P' | 'N' | 'B' | 'R' | 'Q' | 'K' => count += 1,
                 _ => return Err(format!("Invalid character '{}' in FEN rank", ch)),
             }
         }
@@ -208,7 +213,10 @@ fn validate_fen(fen: &str) -> Result<(), String> {
     }
     // Side to move
     if parts[1] != "w" && parts[1] != "b" {
-        return Err(format!("Invalid side to move '{}' — must be 'w' or 'b'", parts[1]));
+        return Err(format!(
+            "Invalid side to move '{}' — must be 'w' or 'b'",
+            parts[1]
+        ));
     }
     Ok(())
 }
@@ -262,10 +270,10 @@ pub async fn new_game(
     if let Err(e) = persistence::save_game(&game) {
         log::warn!("Could not persist new game {}: {}", game.id, e);
     }
-    data.games.lock().map_err(|_| ()).ok().map(|mut g| {
+    if let Ok(mut g) = data.games.lock() {
         evict_old_games(&mut g);
         g.insert(game_id, game);
-    });
+    }
 
     HttpResponse::Ok().json(response)
 }
@@ -286,9 +294,11 @@ pub async fn set_position(
     ensure_game_loaded(&mut games, &game_id);
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
-        None => return HttpResponse::NotFound().json(ErrorResponse {
-            error: "Game not found".to_string(),
-        }),
+        None => {
+            return HttpResponse::NotFound().json(ErrorResponse {
+                error: "Game not found".to_string(),
+            })
+        }
     };
     if let Err(e) = validate_fen(&body.fen) {
         return HttpResponse::BadRequest().json(ErrorResponse { error: e });
@@ -314,10 +324,7 @@ pub async fn set_position(
     })
 }
 
-pub async fn get_game(
-    data: web::Data<AppState>,
-    path: web::Path<String>,
-) -> impl Responder {
+pub async fn get_game(data: web::Data<AppState>, path: web::Path<String>) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
 
@@ -355,37 +362,32 @@ pub async fn make_move(
     ensure_game_loaded(&mut games, &game_id);
 
     match games.get_mut(&game_id) {
-        Some(game) => {
-            match game.make_move(&body.uci) {
-                Ok(result) => {
-                    if let Err(e) = persistence::save_game(game) {
-                        log::warn!("Could not persist game after move: {}", e);
-                    }
-                    let response = MoveResponse {
-                        success: true,
-                        move_uci: result.move_uci,
-                        fen: game.board.to_fen(),
-                        pieces: game.board.to_piece_list(),
-                        legal_moves: game.get_legal_moves(),
-                        captured: result.captured,
-                        is_check: result.is_check,
-                        status: format!("{:?}", game.status),
-                    };
-                    HttpResponse::Ok().json(response)
+        Some(game) => match game.make_move(&body.uci) {
+            Ok(result) => {
+                if let Err(e) = persistence::save_game(game) {
+                    log::warn!("Could not persist game after move: {}", e);
                 }
-                Err(e) => HttpResponse::BadRequest().json(ErrorResponse { error: e }),
+                let response = MoveResponse {
+                    success: true,
+                    move_uci: result.move_uci,
+                    fen: game.board.to_fen(),
+                    pieces: game.board.to_piece_list(),
+                    legal_moves: game.get_legal_moves(),
+                    captured: result.captured,
+                    is_check: result.is_check,
+                    status: format!("{:?}", game.status),
+                };
+                HttpResponse::Ok().json(response)
             }
-        }
+            Err(e) => HttpResponse::BadRequest().json(ErrorResponse { error: e }),
+        },
         None => HttpResponse::NotFound().json(ErrorResponse {
             error: "Game not found".to_string(),
         }),
     }
 }
 
-pub async fn get_legal_moves(
-    data: web::Data<AppState>,
-    path: web::Path<String>,
-) -> impl Responder {
+pub async fn get_legal_moves(data: web::Data<AppState>, path: web::Path<String>) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
 
@@ -438,7 +440,7 @@ pub async fn engine_move(
         Some(game) => {
             let depth = query.depth.unwrap_or(4).min(12);
             match search_best_move(&game.board, depth) {
-                Some((best_move, score)) => {
+                Some((best_move, _score)) => {
                     let uci = best_move.to_uci();
                     match game.make_move(&uci) {
                         Ok(result) => {
@@ -457,7 +459,9 @@ pub async fn engine_move(
                             };
                             HttpResponse::Ok().json(response)
                         }
-                        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse { error: e }),
+                        Err(e) => {
+                            HttpResponse::InternalServerError().json(ErrorResponse { error: e })
+                        }
                     }
                 }
                 None => HttpResponse::Ok().json(serde_json::json!({
@@ -487,36 +491,39 @@ pub async fn analyze_position(body: web::Json<AnalyzeRequest>) -> impl Responder
     let top = search_top_moves(&board, depth, num_moves);
     let total_legal = generate_legal_moves(&board).len();
 
-    let top_moves: Vec<AnalyzedMove> = top.into_iter().map(|(mv, score, pv)| {
-        // Make the move to get the resulting position
-        let mut result_board = board.clone();
-        let is_capture = board.piece_at(mv.to).is_some() || mv.is_en_passant;
-        crate::moves::make_move(&mut result_board, &mv);
-        let is_check = result_board.is_in_check();
+    let top_moves: Vec<AnalyzedMove> = top
+        .into_iter()
+        .map(|(mv, score, pv)| {
+            // Make the move to get the resulting position
+            let mut result_board = board.clone();
+            let is_capture = board.piece_at(mv.to).is_some() || mv.is_en_passant;
+            crate::moves::make_move(&mut result_board, &mv);
+            let is_check = result_board.is_in_check();
 
-        // Detect mate scores
-        let mate_in = if score.abs() > 18000 {
-            let plies = 19000 - score.abs();
-            let mate_moves = (plies + 1) / 2;
-            Some(if score > 0 { mate_moves } else { -mate_moves })
-        } else {
-            None
-        };
+            // Detect mate scores
+            let mate_in = if score.abs() > 18000 {
+                let plies = 19000 - score.abs();
+                let mate_moves = (plies + 1) / 2;
+                Some(if score > 0 { mate_moves } else { -mate_moves })
+            } else {
+                None
+            };
 
-        AnalyzedMove {
-            uci: mv.to_uci(),
-            from: crate::board::square_name(mv.from),
-            to: crate::board::square_name(mv.to),
-            score,
-            score_cp: score,
-            mate_in,
-            is_capture,
-            is_check,
-            principal_variation: pv.iter().map(|m| m.to_uci()).collect(),
-            resulting_fen: result_board.to_fen(),
-            resulting_pieces: result_board.to_piece_list(),
-        }
-    }).collect();
+            AnalyzedMove {
+                uci: mv.to_uci(),
+                from: crate::board::square_name(mv.from),
+                to: crate::board::square_name(mv.to),
+                score,
+                score_cp: score,
+                mate_in,
+                is_capture,
+                is_check,
+                principal_variation: pv.iter().map(|m| m.to_uci()).collect(),
+                resulting_fen: result_board.to_fen(),
+                resulting_pieces: result_board.to_piece_list(),
+            }
+        })
+        .collect();
 
     HttpResponse::Ok().json(AnalyzeResponse {
         fen: body.fen.clone(),
@@ -572,8 +579,8 @@ pub async fn new_variant_game(
     data: web::Data<AppState>,
     body: web::Json<NewVariantGameRequest>,
 ) -> impl Responder {
-    let variant = variants::GameVariant::from_str(&body.variant)
-        .unwrap_or(variants::GameVariant::Standard);
+    let variant =
+        variants::GameVariant::from_str(&body.variant).unwrap_or(variants::GameVariant::Standard);
 
     let game = match variant {
         variants::GameVariant::Chess960 => {
@@ -610,10 +617,10 @@ pub async fn new_variant_game(
     if let Err(e) = persistence::save_game(&game) {
         log::warn!("Could not persist variant game {}: {}", game.id, e);
     }
-    data.games.lock().map_err(|_| ()).ok().map(|mut g| {
+    if let Ok(mut g) = data.games.lock() {
         evict_old_games(&mut g);
         g.insert(game_id, game);
-    });
+    }
 
     HttpResponse::Ok().json(response)
 }
@@ -636,9 +643,11 @@ pub async fn resign_game(
     ensure_game_loaded(&mut games, &game_id);
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
-        None => return HttpResponse::NotFound().json(ErrorResponse {
-            error: "Game not found".to_string(),
-        }),
+        None => {
+            return HttpResponse::NotFound().json(ErrorResponse {
+                error: "Game not found".to_string(),
+            })
+        }
     };
     if game.status != GameStatus::Active {
         return HttpResponse::BadRequest().json(ErrorResponse {
@@ -652,7 +661,11 @@ pub async fn resign_game(
         });
     }
     game.status = GameStatus::Resigned(color.clone());
-    let stm = if game.board.side_to_move == crate::piece::Color::White { "white" } else { "black" };
+    let stm = if game.board.side_to_move == crate::piece::Color::White {
+        "white"
+    } else {
+        "black"
+    };
     HttpResponse::Ok().json(GameStateResponse {
         game_id: game.id.clone(),
         fen: game.board.to_fen(),
@@ -665,18 +678,17 @@ pub async fn resign_game(
     })
 }
 
-pub async fn draw_game(
-    data: web::Data<AppState>,
-    path: web::Path<String>,
-) -> impl Responder {
+pub async fn draw_game(data: web::Data<AppState>, path: web::Path<String>) -> impl Responder {
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
     ensure_game_loaded(&mut games, &game_id);
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
-        None => return HttpResponse::NotFound().json(ErrorResponse {
-            error: "Game not found".to_string(),
-        }),
+        None => {
+            return HttpResponse::NotFound().json(ErrorResponse {
+                error: "Game not found".to_string(),
+            })
+        }
     };
     if game.status != GameStatus::Active {
         return HttpResponse::BadRequest().json(ErrorResponse {
@@ -684,7 +696,11 @@ pub async fn draw_game(
         });
     }
     game.status = GameStatus::Draw;
-    let stm = if game.board.side_to_move == crate::piece::Color::White { "white" } else { "black" };
+    let stm = if game.board.side_to_move == crate::piece::Color::White {
+        "white"
+    } else {
+        "black"
+    };
     HttpResponse::Ok().json(GameStateResponse {
         game_id: game.id.clone(),
         fen: game.board.to_fen(),
@@ -699,8 +715,7 @@ pub async fn draw_game(
 
 /// Configure API routes
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    cfg
-        .route("/health", web::get().to(health_check))
+    cfg.route("/health", web::get().to(health_check))
         .route("/info", web::get().to(engine_info))
         .route("/game/new", web::post().to(new_game))
         .route("/game/{id}", web::get().to(get_game))

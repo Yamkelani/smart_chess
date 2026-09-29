@@ -129,7 +129,10 @@ pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
 fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     let mut moves = Vec::with_capacity(64);
     let side = board.side_to_move;
-    let ci = match side { Color::White => 0, Color::Black => 1 };
+    let ci = match side {
+        Color::White => 0,
+        Color::Black => 1,
+    };
     let own_pieces = board.pieces_of(side);
     let enemy_pieces = board.pieces_of(side.opposite());
 
@@ -145,8 +148,11 @@ fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     moves
 }
 
-fn generate_pawn_moves(board: &Board, side: Color, own: u64, enemy: u64, moves: &mut Vec<Move>) {
-    let ci = match side { Color::White => 0, Color::Black => 1 };
+fn generate_pawn_moves(board: &Board, side: Color, _own: u64, enemy: u64, moves: &mut Vec<Move>) {
+    let ci = match side {
+        Color::White => 0,
+        Color::Black => 1,
+    };
     let pawns = board.bitboards[ci][5];
     let empty = !board.all_pieces;
 
@@ -191,7 +197,9 @@ fn generate_pawn_moves(board: &Board, side: Color, own: u64, enemy: u64, moves: 
         // Captures
         for df in [-1i8, 1] {
             let f = file as i8 + df;
-            if f < 0 || f >= 8 { continue; }
+            if !(0..8).contains(&f) {
+                continue;
+            }
             let target = sq(target_rank, f as u8);
 
             // Normal capture
@@ -348,7 +356,10 @@ fn generate_castling_moves(board: &Board, side: Color, moves: &mut Vec<Move>) {
 pub fn make_move(board: &mut Board, mv: &Move) -> bool {
     let side = board.side_to_move;
     let enemy = side.opposite();
-    let ci = match side { Color::White => 0, Color::Black => 1 };
+    let _ci = match side {
+        Color::White => 0,
+        Color::Black => 1,
+    };
 
     let piece = match board.piece_at(mv.from) {
         Some(p) => p,
@@ -370,8 +381,8 @@ pub fn make_move(board: &mut Board, mv: &Move) -> bool {
     // Handle castling - move the rook
     if mv.is_castling {
         let (rook_from, rook_to) = match mv.to {
-            6 => (7, 5),   // White kingside
-            2 => (0, 3),   // White queenside
+            6 => (7, 5),    // White kingside
+            2 => (0, 3),    // White queenside
             62 => (63, 61), // Black kingside
             58 => (56, 59), // Black queenside
             _ => return false,
@@ -422,10 +433,18 @@ pub fn make_move(board: &mut Board, mv: &Move) -> bool {
         }
     }
     // If rook moves or is captured, lose that side's castling right
-    if mv.from == 0 || mv.to == 0 { board.castling_rights.white_queenside = false; }
-    if mv.from == 7 || mv.to == 7 { board.castling_rights.white_kingside = false; }
-    if mv.from == 56 || mv.to == 56 { board.castling_rights.black_queenside = false; }
-    if mv.from == 63 || mv.to == 63 { board.castling_rights.black_kingside = false; }
+    if mv.from == 0 || mv.to == 0 {
+        board.castling_rights.white_queenside = false;
+    }
+    if mv.from == 7 || mv.to == 7 {
+        board.castling_rights.white_kingside = false;
+    }
+    if mv.from == 56 || mv.to == 56 {
+        board.castling_rights.black_queenside = false;
+    }
+    if mv.from == 63 || mv.to == 63 {
+        board.castling_rights.black_kingside = false;
+    }
 
     // Update halfmove clock
     if piece.piece_type == PieceType::Pawn || is_capture {
