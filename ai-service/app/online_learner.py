@@ -166,7 +166,7 @@ class OnlineLearner:
                 session.positions.append(record)
 
     def complete_game(self, game_id: str, result: str,
-                      winner: Optional[str] = None) -> dict:
+                      winner: str | None = None) -> dict:
         """
         Signal that a game has ended. Converts recorded positions to
         training examples with proper value targets, adds to replay
@@ -369,7 +369,7 @@ class OnlineLearner:
     # ---- Helpers ----
 
     @staticmethod
-    def _extract_colour(result: str) -> Optional[str]:
+    def _extract_colour(result: str) -> str | None:
         """Extract the colour token from an engine status string.
 
         The Rust engine serialises status with format!("{:?}", status), and Debug
@@ -385,11 +385,11 @@ class OnlineLearner:
         return m.group(1).lower() if m else None
 
     @staticmethod
-    def _other_colour(colour: str) -> Optional[str]:
+    def _other_colour(colour: str) -> str | None:
         return {"white": "black", "black": "white"}.get(colour)
 
     @classmethod
-    def _extract_winner(cls, result: str) -> Optional[str]:
+    def _extract_winner(cls, result: str) -> str | None:
         """The colour that *won*, or None if undetermined.
 
         GameStatus::Resigned records the colour that resigned (engine api.rs
@@ -403,7 +403,7 @@ class OnlineLearner:
             return cls._other_colour(colour)
         return colour
 
-    def _white_value_for(self, result: str, winner: Optional[str]) -> float:
+    def _white_value_for(self, result: str, winner: str | None) -> float:
         """Value target from white's perspective: +1 white won, -1 black won, 0 draw.
 
         Uses the structured `winner` when the caller supplies one and only falls

@@ -67,7 +67,7 @@ class GameCompleteRequest(BaseModel):
     # Structured outcome. Optional so existing clients keep working, but callers
     # should send it: deriving the winner from `result` means parsing a display
     # string, which is how every decisive game came to be labelled a draw.
-    winner: Optional[str] = None
+    winner: str | None = None
 
 class EvalRequest(BaseModel):
     fen: str
