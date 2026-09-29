@@ -136,6 +136,8 @@ pub struct GameStateResponse {
     pub pieces: Vec<crate::board::PieceInfo>,
     pub legal_moves: Vec<String>,
     pub status: String,
+    /// True if an arbitrary position was loaded, so the result is unranked.
+    pub is_analysis: bool,
     /// Winning colour, or null for an unfinished or drawn game.
     ///
     /// `status` is a Debug rendering intended for display. Consumers that need
@@ -158,6 +160,8 @@ pub struct MoveResponse {
     /// Winning colour, or null for an unfinished or drawn game. See
     /// `GameStateResponse::winner`.
     pub winner: Option<String>,
+    /// True if an arbitrary position was loaded, so the result is unranked.
+    pub is_analysis: bool,
 }
 
 #[derive(Serialize)]
@@ -342,12 +346,11 @@ pub async fn set_position(
     if let Err(e) = validate_fen(&body.fen) {
         return HttpResponse::BadRequest().json(ErrorResponse { error: e });
     }
-    let new_board = match Board::from_fen(&body.fen) {
-        Ok(b) => b,
-        Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
-    };
-    game.board = new_board;
-    game.status = GameStatus::Active;
+    // Resets the board and every parallel history together, and flags the game
+    // as analysis so a hand-placed position cannot yield a rated result.
+    if let Err(e) = game.load_position(&body.fen) {
+        return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+    }
     if let Err(e) = persistence::save_game(game) {
         log::warn!("Could not persist game after set_position: {}", e);
     }
@@ -359,6 +362,59 @@ pub async fn set_position(
         legal_moves: game.get_legal_moves(),
         status: format!("{:?}", game.status),
         winner: game.status.winner().map(str::to_string),
+        is_analysis: game.is_analysis,
+        move_history: game.move_history.clone(),
+        is_check: game.board.is_in_check(),
+    })
+}
+
+/// Rewind a number of half-moves through the game's own recorded history.
+#[derive(Deserialize)]
+pub struct UndoRequest {
+    /// Half-moves to rewind. Defaults to one.
+    pub moves: Option<usize>,
+}
+
+/// Server-authoritative undo.
+///
+/// Unlike `set_position`, this can only restore a position this game actually
+/// reached, so it cannot be used to fabricate a position or to resurrect a
+/// finished game into one that was never played.
+pub async fn undo_moves(
+    data: web::Data<AppState>,
+    path: web::Path<String>,
+    body: Option<web::Json<UndoRequest>>,
+) -> impl Responder {
+    let game_id = path.into_inner();
+    let count = body.and_then(|b| b.moves).unwrap_or(1);
+
+    let mut games = lock_games!(data);
+    ensure_game_loaded(&mut games, &game_id);
+    let game = match games.get_mut(&game_id) {
+        Some(g) => g,
+        None => {
+            return HttpResponse::NotFound().json(ErrorResponse {
+                error: "Game not found".to_string(),
+            })
+        }
+    };
+
+    if let Err(e) = game.undo_moves(count) {
+        return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+    }
+    if let Err(e) = persistence::save_game(game) {
+        log::warn!("Could not persist game after undo: {}", e);
+    }
+
+    HttpResponse::Ok().json(GameStateResponse {
+        game_id: game.id.clone(),
+        fen: game.board.to_fen(),
+        side_to_move: format!("{}", game.board.side_to_move),
+        pieces: game.board.to_piece_list(),
+        legal_moves: game.get_legal_moves(),
+        status: format!("{:?}", game.status),
+        winner: game.status.winner().map(str::to_string),
+        is_analysis: game.is_analysis,
         move_history: game.move_history.clone(),
         is_check: game.board.is_in_check(),
     })
@@ -381,6 +437,7 @@ pub async fn get_game(data: web::Data<AppState>, path: web::Path<String>) -> imp
                 legal_moves: game.get_legal_moves(),
                 status: format!("{:?}", game.status),
                 winner: game.status.winner().map(str::to_string),
+                is_analysis: game.is_analysis,
                 move_history: game.move_history.clone(),
                 is_check: game.board.is_in_check(),
             };
@@ -418,6 +475,7 @@ pub async fn make_move(
                     is_check: result.is_check,
                     status: format!("{:?}", game.status),
                     winner: game.status.winner().map(str::to_string),
+                    is_analysis: game.is_analysis,
                 };
                 HttpResponse::Ok().json(response)
             }
@@ -566,6 +624,7 @@ pub async fn engine_move(
                 is_check: result.is_check,
                 status: format!("{:?}", game.status),
                 winner: game.status.winner().map(str::to_string),
+                is_analysis: game.is_analysis,
             };
             HttpResponse::Ok().json(response)
         }
@@ -786,6 +845,7 @@ pub async fn resign_game(
         pieces: game.board.to_piece_list(),
         status: format!("{:?}", game.status),
         winner: game.status.winner().map(str::to_string),
+        is_analysis: game.is_analysis,
         legal_moves: vec![],
         move_history: game.move_history.clone(),
         is_check: false,
@@ -822,6 +882,7 @@ pub async fn draw_game(data: web::Data<AppState>, path: web::Path<String>) -> im
         pieces: game.board.to_piece_list(),
         status: format!("{:?}", game.status),
         winner: game.status.winner().map(str::to_string),
+        is_analysis: game.is_analysis,
         legal_moves: vec![],
         move_history: game.move_history.clone(),
         is_check: false,
@@ -837,6 +898,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/game/{id}/move", web::post().to(make_move))
         .route("/game/{id}/moves", web::get().to(get_legal_moves))
         .route("/game/{id}/set-position", web::post().to(set_position))
+        .route("/game/{id}/undo", web::post().to(undo_moves))
         .route("/game/{id}/engine-move", web::post().to(engine_move))
         .route("/game/{id}/resign", web::post().to(resign_game))
         .route("/game/{id}/draw", web::post().to(draw_game))
