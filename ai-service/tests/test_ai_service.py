@@ -431,6 +431,36 @@ class TestModel:
         for v in value:
             assert -1.0 <= v.item() <= 1.0, "Value head should output tanh in [-1, 1]"
 
+    def test_checkpoint_round_trip(self, tmp_path, monkeypatch):
+        import app.model as model_module
+
+        monkeypatch.setattr(model_module, "MODEL_DIR", str(tmp_path))
+        saver = model_module.ChessNetManager(device="cpu")
+        saver.generation = 7
+        saver.save_model()
+
+        loader = model_module.ChessNetManager(device="cpu")
+        assert loader.generation == 7
+        for key, tensor in saver.model.state_dict().items():
+            assert torch.equal(tensor, loader.model.state_dict()[key])
+
+    def test_tampered_checkpoint_does_not_run_code(self, tmp_path, monkeypatch):
+        import app.model as model_module
+
+        marker = tmp_path / "payload_ran"
+
+        class Payload:
+            def __reduce__(self):
+                return (exec, (f"open({str(marker)!r}, 'w').close()",))
+
+        monkeypatch.setattr(model_module, "MODEL_DIR", str(tmp_path))
+        torch.save({"model_state_dict": Payload(), "generation": 1},
+                   tmp_path / model_module.MODEL_FILENAME)
+
+        manager = model_module.ChessNetManager(device="cpu")
+        assert not marker.exists(), "loading a checkpoint must not execute embedded code"
+        assert manager.generation == 0  # fell back to fresh weights
+
 
 # ---------------------------------------------------------------------------
 # Difficulty filter tests (applied post-MCTS)
