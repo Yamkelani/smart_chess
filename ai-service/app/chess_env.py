@@ -6,8 +6,8 @@ Uses python-chess for game logic during AI training, and communicates with
 the Rust engine for production play.
 """
 
-import numpy as np
 import chess
+import numpy as np
 
 # Move encoding: We encode moves as (from_square, to_square, promotion_type)
 # Total: 64 * 64 + 64 * 64 * 3 (for underpromotions) ≈ 4672 possible actions
