@@ -172,7 +172,6 @@ pub struct RoomMoveRequest {
 pub struct UpdateLeaderboardRequest {
     pub player_id: String,
     pub player_name: String,
-    pub rating: i32,
     pub result: String, // "win" | "loss" | "draw"
 }
 
@@ -207,6 +206,52 @@ pub struct PollResponse {
 }
 
 // ── Utility ──
+
+/// Starting rating for a player the leaderboard has not seen before.
+const INITIAL_RATING: i32 = 1200;
+
+/// Elo K-factor for leaderboard updates.
+const RATING_K: i32 = 24;
+
+/// Cap on stored leaderboard entries. Entries are created by unauthenticated
+/// callers, so without a cap the map is an unbounded memory sink.
+const MAX_LEADERBOARD_ENTRIES: usize = 10_000;
+
+/// Longest accepted display name.
+const MAX_NAME_LEN: usize = 32;
+
+/// Whether leaderboard writes are accepted.
+///
+/// Off by default: the endpoint attributes a result to a caller-supplied
+/// player_id, and with no authenticated identity any caller can submit results
+/// as anybody. Enable with ENABLE_LEADERBOARD_WRITES=1 only where that is
+/// acceptable (a trusted network, or once identity is authenticated).
+fn leaderboard_writes_enabled() -> bool {
+    matches!(
+        std::env::var("ENABLE_LEADERBOARD_WRITES")
+            .unwrap_or_default()
+            .as_str(),
+        "1" | "true" | "TRUE" | "yes"
+    )
+}
+
+/// Trim a client-supplied display name to something safe to store.
+///
+/// Control characters are stripped because the name is rendered in the lobby;
+/// escaping at the point of render is the primary defence, this is depth.
+fn sanitise_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_NAME_LEN)
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "Anonymous".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
 
 fn now_epoch() -> u64 {
     std::time::SystemTime::now()
@@ -706,29 +751,63 @@ pub async fn update_leaderboard(
     mp_state: web::Data<MultiplayerState>,
     body: web::Json<UpdateLeaderboardRequest>,
 ) -> impl Responder {
-    let mut lb = mp_state.leaderboard.lock().unwrap();
+    if !leaderboard_writes_enabled() {
+        return HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Leaderboard writes are disabled",
+            "reason": "Results are attributed to a caller-supplied player id, which cannot be trusted without authentication."
+        }));
+    }
 
-    // Find or create entry
+    let delta = match body.result.as_str() {
+        "win" => 1.0_f64,
+        "draw" => 0.5_f64,
+        "loss" => 0.0_f64,
+        other => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("result must be 'win', 'loss' or 'draw', got '{}'", other)
+            }))
+        }
+    };
+
+    let name = sanitise_name(&body.player_name);
+    let mut lb = match mp_state.leaderboard.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Internal lock error"
+            }))
+        }
+    };
+
     let entry = lb.iter_mut().find(|e| e.player_id == body.player_id);
-
-    match entry {
+    let new_rating = match entry {
         Some(e) => {
-            e.player_name = body.player_name.clone();
-            e.rating = body.rating;
+            e.player_name = name;
             match body.result.as_str() {
                 "win" => e.wins += 1,
                 "loss" => e.losses += 1,
-                "draw" => e.draws += 1,
-                _ => {}
+                _ => e.draws += 1,
             }
             e.games_played += 1;
             e.last_active = now_epoch();
+            // Rating is derived here, never taken from the request. Expected
+            // score is against a nominal average opponent, since this endpoint
+            // does not know who was played.
+            let expected = 1.0 / (1.0 + 10f64.powf((INITIAL_RATING - e.rating) as f64 / 400.0));
+            e.rating += (RATING_K as f64 * (delta - expected)).round() as i32;
+            e.rating = e.rating.clamp(100, 4000);
+            e.rating
         }
         None => {
+            if lb.len() >= MAX_LEADERBOARD_ENTRIES {
+                return HttpResponse::TooManyRequests().json(serde_json::json!({
+                    "error": "Leaderboard is full"
+                }));
+            }
             let mut entry = LeaderboardEntry {
                 player_id: body.player_id.clone(),
-                player_name: body.player_name.clone(),
-                rating: body.rating,
+                player_name: name,
+                rating: INITIAL_RATING,
                 wins: 0,
                 losses: 0,
                 draws: 0,
@@ -738,14 +817,19 @@ pub async fn update_leaderboard(
             match body.result.as_str() {
                 "win" => entry.wins = 1,
                 "loss" => entry.losses = 1,
-                "draw" => entry.draws = 1,
-                _ => {}
+                _ => entry.draws = 1,
             }
+            entry.rating += (RATING_K as f64 * (delta - 0.5)).round() as i32;
+            let rating = entry.rating;
             lb.push(entry);
+            rating
         }
-    }
+    };
 
-    HttpResponse::Ok().json(serde_json::json!({ "status": "updated" }))
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "updated",
+        "rating": new_rating
+    }))
 }
 
 // ── Tournament System ──
