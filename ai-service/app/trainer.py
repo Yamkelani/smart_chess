@@ -171,7 +171,7 @@ class TrainingPipeline:
         self.replay_buffer = ReplayBuffer(max_size=TRAINING_BUFFER_SIZE)
 
         # Try to load existing replay buffer
-        buffer_path = os.path.join(TRAINING_DATA_DIR, "replay_buffer.pkl")
+        buffer_path = os.path.join(TRAINING_DATA_DIR, "replay_buffer.npz")
         self.replay_buffer.load(buffer_path)
 
     def run_iteration(self, iteration: int,
@@ -206,7 +206,7 @@ class TrainingPipeline:
 
             # Save replay buffer
             os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
-            buffer_path = os.path.join(TRAINING_DATA_DIR, "replay_buffer.pkl")
+            buffer_path = os.path.join(TRAINING_DATA_DIR, "replay_buffer.npz")
             self.replay_buffer.save(buffer_path)
 
             # Save iteration stats

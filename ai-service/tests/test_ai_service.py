@@ -462,6 +462,67 @@ class TestModel:
         assert manager.generation == 0  # fell back to fresh weights
 
 
+@pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not installed")
+class TestReplayBuffer:
+    @staticmethod
+    def _example(seed):
+        from app.self_play import TrainingExample
+
+        rng = np.random.default_rng(seed)
+        return TrainingExample(
+            board_tensor=rng.random((NN_INPUT_CHANNELS, NN_BOARD_SIZE, NN_BOARD_SIZE), dtype=np.float32),
+            policy_target=rng.random(NN_POLICY_OUTPUT, dtype=np.float32),
+            value_target=float(rng.choice([-1.0, 0.0, 1.0])),
+        )
+
+    def test_round_trip(self, tmp_path):
+        from app.self_play import ReplayBuffer
+
+        buf = ReplayBuffer(max_size=123)
+        buf.buffer = [self._example(i) for i in range(5)]
+        path = str(tmp_path / "buf.npz")
+        buf.save(path)
+
+        loaded = ReplayBuffer()
+        assert loaded.load(path)
+        assert loaded.max_size == 123
+        assert len(loaded) == 5
+        for a, b in zip(buf.buffer, loaded.buffer, strict=True):
+            assert np.array_equal(a.board_tensor, b.board_tensor)
+            assert np.array_equal(a.policy_target, b.policy_target)
+            assert a.value_target == b.value_target
+            assert isinstance(b.value_target, float)
+
+    def test_empty_round_trip(self, tmp_path):
+        from app.self_play import ReplayBuffer
+
+        path = str(tmp_path / "empty.npz")
+        ReplayBuffer(max_size=9).save(path)
+        loaded = ReplayBuffer()
+        assert loaded.load(path)
+        assert len(loaded) == 0
+        assert loaded.max_size == 9
+
+    def test_pickled_file_does_not_run_code(self, tmp_path):
+        import pickle
+
+        from app.self_play import ReplayBuffer
+
+        marker = tmp_path / "payload_ran"
+
+        class Payload:
+            def __reduce__(self):
+                return (exec, (f"open({str(marker)!r}, 'w').close()",))
+
+        path = tmp_path / "buf.npz"
+        path.write_bytes(pickle.dumps({"buffer": Payload(), "max_size": 1}))
+
+        buf = ReplayBuffer()
+        assert not buf.load(str(path))
+        assert not marker.exists(), "loading a replay buffer must not execute embedded code"
+        assert len(buf) == 0
+
+
 # ---------------------------------------------------------------------------
 # Difficulty filter tests (applied post-MCTS)
 # ---------------------------------------------------------------------------
