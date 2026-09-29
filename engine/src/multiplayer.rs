@@ -14,13 +14,13 @@ use crate::variants::{GameVariant, VariantState};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiplayerRoom {
     pub room_id: String,
-    pub room_code: String,  // 6-char join code
+    pub room_code: String, // 6-char join code
     pub game_id: Option<String>,
     pub host_id: String,
     pub guest_id: Option<String>,
     pub host_name: String,
     pub guest_name: Option<String>,
-    pub host_color: String,  // "white" | "black" | "random"
+    pub host_color: String, // "white" | "black" | "random"
     pub variant: String,
     pub time_control: Option<TimeControl>,
     pub status: RoomStatus,
@@ -33,11 +33,11 @@ pub struct MultiplayerRoom {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RoomStatus {
-    Waiting,     // Host created, waiting for guest
-    Ready,       // Both players joined
-    Playing,     // Game in progress
-    Finished,    // Game over
-    Abandoned,   // Player left
+    Waiting,   // Host created, waiting for guest
+    Ready,     // Both players joined
+    Playing,   // Game in progress
+    Finished,  // Game over
+    Abandoned, // Player left
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +75,7 @@ pub struct Spectator {
 
 pub struct MultiplayerState {
     pub rooms: Mutex<HashMap<String, MultiplayerRoom>>,
-    pub player_rooms: Mutex<HashMap<String, String>>,  // player_id -> room_id
+    pub player_rooms: Mutex<HashMap<String, String>>, // player_id -> room_id
     pub leaderboard: Mutex<Vec<LeaderboardEntry>>,
 }
 
@@ -150,7 +150,7 @@ pub struct UpdateLeaderboardRequest {
     pub player_id: String,
     pub player_name: String,
     pub rating: i32,
-    pub result: String,  // "win" | "loss" | "draw"
+    pub result: String, // "win" | "loss" | "draw"
 }
 
 #[derive(Serialize)]
@@ -196,7 +196,9 @@ fn generate_room_code() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let chars: Vec<char> = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".chars().collect();
-    (0..6).map(|_| chars[rng.gen_range(0..chars.len())]).collect()
+    (0..6)
+        .map(|_| chars[rng.gen_range(0..chars.len())])
+        .collect()
 }
 
 // ── API Handlers ──
@@ -218,8 +220,14 @@ pub async fn create_room(
         guest_id: None,
         host_name: body.player_name.clone(),
         guest_name: None,
-        host_color: body.host_color.clone().unwrap_or_else(|| "white".to_string()),
-        variant: body.variant.clone().unwrap_or_else(|| "standard".to_string()),
+        host_color: body
+            .host_color
+            .clone()
+            .unwrap_or_else(|| "white".to_string()),
+        variant: body
+            .variant
+            .clone()
+            .unwrap_or_else(|| "standard".to_string()),
         time_control: body.time_control.clone(),
         status: RoomStatus::Waiting,
         created_at: now,
@@ -230,7 +238,11 @@ pub async fn create_room(
     };
 
     mp_state.rooms.lock().unwrap().insert(room_id.clone(), room);
-    mp_state.player_rooms.lock().unwrap().insert(body.player_id.clone(), room_id.clone());
+    mp_state
+        .player_rooms
+        .lock()
+        .unwrap()
+        .insert(body.player_id.clone(), room_id.clone());
 
     HttpResponse::Ok().json(RoomResponse {
         room_id,
@@ -239,8 +251,14 @@ pub async fn create_room(
         host_name: body.player_name.clone(),
         guest_name: None,
         game_id: None,
-        host_color: body.host_color.clone().unwrap_or_else(|| "white".to_string()),
-        variant: body.variant.clone().unwrap_or_else(|| "standard".to_string()),
+        host_color: body
+            .host_color
+            .clone()
+            .unwrap_or_else(|| "white".to_string()),
+        variant: body
+            .variant
+            .clone()
+            .unwrap_or_else(|| "standard".to_string()),
         spectator_count: 0,
     })
 }
@@ -253,15 +271,18 @@ pub async fn join_room(
     let mut rooms = mp_state.rooms.lock().unwrap();
 
     // Find room by code
-    let room_id = rooms.iter()
+    let room_id = rooms
+        .iter()
         .find(|(_, r)| r.room_code == body.room_code && r.status == RoomStatus::Waiting)
         .map(|(id, _)| id.clone());
 
     let room_id = match room_id {
         Some(id) => id,
-        None => return HttpResponse::NotFound().json(serde_json::json!({
-            "error": "Room not found or already full"
-        })),
+        None => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Room not found or already full"
+            }))
+        }
     };
 
     let room = rooms.get_mut(&room_id).unwrap();
@@ -283,8 +304,16 @@ pub async fn join_room(
     room.game_id = Some(game_id.clone());
     room.status = RoomStatus::Playing;
 
-    game_state.games.lock().unwrap().insert(game_id.clone(), game);
-    mp_state.player_rooms.lock().unwrap().insert(body.player_id.clone(), room_id.clone());
+    game_state
+        .games
+        .lock()
+        .unwrap()
+        .insert(game_id.clone(), game);
+    mp_state
+        .player_rooms
+        .lock()
+        .unwrap()
+        .insert(body.player_id.clone(), room_id.clone());
 
     HttpResponse::Ok().json(RoomResponse {
         room_id: room.room_id.clone(),
@@ -339,9 +368,11 @@ pub async fn room_poll(
 
     let room = match rooms.get(&room_id) {
         Some(r) => r,
-        None => return HttpResponse::NotFound().json(serde_json::json!({
-            "error": "Room not found"
-        })),
+        None => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Room not found"
+            }))
+        }
     };
 
     let games = game_state.games.lock().unwrap();
@@ -349,7 +380,7 @@ pub async fn room_poll(
     let last_move_count = body.last_move_count.unwrap_or(0);
     let last_chat_count = body.last_chat_count.unwrap_or(0);
 
-    let (fen, pieces, legal_moves, side_to_move, is_check, game_status, move_history) = 
+    let (fen, pieces, legal_moves, side_to_move, is_check, game_status, move_history) =
         if let Some(game_id) = &room.game_id {
             if let Some(game) = games.get(game_id) {
                 (
@@ -373,15 +404,16 @@ pub async fn room_poll(
         let is_host = body.player_id == room.host_id;
         let host_is_white = room.host_color == "white";
         let white_to_move = stm == "white";
-        (is_host && host_is_white && white_to_move) || 
-        (is_host && !host_is_white && !white_to_move) ||
-        (!is_host && host_is_white && !white_to_move) ||
-        (!is_host && !host_is_white && white_to_move)
+        (is_host && host_is_white && white_to_move)
+            || (is_host && !host_is_white && !white_to_move)
+            || (!is_host && host_is_white && !white_to_move)
+            || (!is_host && !host_is_white && white_to_move)
     } else {
         false
     };
 
-    let new_messages: Vec<ChatMessage> = room.chat_messages
+    let new_messages: Vec<ChatMessage> = room
+        .chat_messages
         .iter()
         .skip(last_chat_count)
         .cloned()
@@ -417,9 +449,11 @@ pub async fn room_move(
 
     let room = match rooms.get_mut(&room_id) {
         Some(r) => r,
-        None => return HttpResponse::NotFound().json(serde_json::json!({
-            "error": "Room not found"
-        })),
+        None => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Room not found"
+            }))
+        }
     };
 
     if room.status != RoomStatus::Playing {
@@ -431,17 +465,21 @@ pub async fn room_move(
     // Verify it's the player's turn
     let game_id = match &room.game_id {
         Some(id) => id.clone(),
-        None => return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "No game in progress"
-        })),
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "No game in progress"
+            }))
+        }
     };
 
     let mut games = game_state.games.lock().unwrap();
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
-        None => return HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": "Game not found"
-        })),
+        None => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Game not found"
+            }))
+        }
     };
 
     match game.make_move(&body.uci) {
@@ -508,11 +546,11 @@ pub async fn request_rematch(
 
     match rooms.get_mut(&room_id) {
         Some(room) => {
-            let player_id = body.get("player_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let player_id = body.get("player_id").and_then(|v| v.as_str()).unwrap_or("");
 
-            if room.rematch_requested_by.is_some() && room.rematch_requested_by.as_deref() != Some(player_id) {
+            if room.rematch_requested_by.is_some()
+                && room.rematch_requested_by.as_deref() != Some(player_id)
+            {
                 // Both players want rematch — start new game
                 let game = GameState::new();
                 let game_id = game.id.clone();
@@ -554,7 +592,8 @@ pub async fn leave_room(
     body: web::Json<serde_json::Value>,
 ) -> impl Responder {
     let room_id = path.into_inner();
-    let player_id = body.get("player_id")
+    let player_id = body
+        .get("player_id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -577,11 +616,10 @@ pub async fn leave_room(
     }
 }
 
-pub async fn list_rooms(
-    mp_state: web::Data<MultiplayerState>,
-) -> impl Responder {
+pub async fn list_rooms(mp_state: web::Data<MultiplayerState>) -> impl Responder {
     let rooms = mp_state.rooms.lock().unwrap();
-    let active: Vec<RoomResponse> = rooms.values()
+    let active: Vec<RoomResponse> = rooms
+        .values()
         .filter(|r| r.status == RoomStatus::Waiting)
         .map(|r| RoomResponse {
             room_id: r.room_id.clone(),
@@ -601,9 +639,7 @@ pub async fn list_rooms(
 
 // ── Leaderboard ──
 
-pub async fn get_leaderboard(
-    mp_state: web::Data<MultiplayerState>,
-) -> impl Responder {
+pub async fn get_leaderboard(mp_state: web::Data<MultiplayerState>) -> impl Responder {
     let lb = mp_state.leaderboard.lock().unwrap();
     let mut sorted = lb.clone();
     sorted.sort_by(|a, b| b.rating.cmp(&a.rating));
@@ -706,21 +742,26 @@ pub struct TournamentRound {
 pub struct TournamentPairing {
     pub white_id: String,
     pub black_id: String,
-    pub result: Option<String>,  // "1-0", "0-1", "1/2-1/2"
+    pub result: Option<String>, // "1-0", "0-1", "1/2-1/2"
     pub room_id: Option<String>,
 }
 
 /// Configure multiplayer routes
 pub fn configure_multiplayer_routes(cfg: &mut web::ServiceConfig) {
-    cfg
-        .route("/multiplayer/rooms", web::get().to(list_rooms))
+    cfg.route("/multiplayer/rooms", web::get().to(list_rooms))
         .route("/multiplayer/room/create", web::post().to(create_room))
         .route("/multiplayer/room/join", web::post().to(join_room))
-        .route("/multiplayer/room/{id}/spectate", web::post().to(spectate_room))
+        .route(
+            "/multiplayer/room/{id}/spectate",
+            web::post().to(spectate_room),
+        )
         .route("/multiplayer/room/{id}/poll", web::post().to(room_poll))
         .route("/multiplayer/room/{id}/move", web::post().to(room_move))
         .route("/multiplayer/room/{id}/chat", web::post().to(send_chat))
-        .route("/multiplayer/room/{id}/rematch", web::post().to(request_rematch))
+        .route(
+            "/multiplayer/room/{id}/rematch",
+            web::post().to(request_rematch),
+        )
         .route("/multiplayer/room/{id}/leave", web::post().to(leave_room))
         .route("/leaderboard", web::get().to(get_leaderboard))
         .route("/leaderboard/update", web::post().to(update_leaderboard));

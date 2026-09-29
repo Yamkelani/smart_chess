@@ -7,10 +7,10 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum GameStatus {
     Active,
-    Checkmate(String),   // Winner color
+    Checkmate(String), // Winner color
     Stalemate,
-    Draw,                // By repetition, 50-move rule, etc.
-    Resigned(String),    // Color that resigned
+    Draw,             // By repetition, 50-move rule, etc.
+    Resigned(String), // Color that resigned
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,12 +18,12 @@ pub struct GameState {
     pub id: String,
     pub board: Board,
     pub status: GameStatus,
-    pub move_history: Vec<String>,     // UCI move strings
-    pub fen_history: Vec<String>,      // FEN after each move
+    pub move_history: Vec<String>, // UCI move strings
+    pub fen_history: Vec<String>,  // FEN after each move
     pub white_player: String,
     pub black_player: String,
     #[serde(default)]
-    pub hash_history: Vec<u64>,        // Zobrist hashes for fast repetition detection
+    pub hash_history: Vec<u64>, // Zobrist hashes for fast repetition detection
 }
 
 impl GameState {
@@ -139,11 +139,18 @@ impl GameState {
             return 1;
         }
         let current = &self.fen_history[self.fen_history.len() - 1];
-        let current_pos: String = current.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
-        self.fen_history.iter().filter(|fen| {
-            let pos: String = fen.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
-            pos == current_pos
-        }).count()
+        let current_pos: String = current
+            .split_whitespace()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.fen_history
+            .iter()
+            .filter(|fen| {
+                let pos: String = fen.split_whitespace().take(4).collect::<Vec<_>>().join(" ");
+                pos == current_pos
+            })
+            .count()
     }
 
     fn is_threefold_repetition(&self) -> bool {

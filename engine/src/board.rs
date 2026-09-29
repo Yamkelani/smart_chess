@@ -162,8 +162,12 @@ impl Board {
         self.mailbox = [None; 64];
         let colors = [Color::White, Color::Black];
         let piece_types = [
-            PieceType::King, PieceType::Queen, PieceType::Rook,
-            PieceType::Bishop, PieceType::Knight, PieceType::Pawn,
+            PieceType::King,
+            PieceType::Queen,
+            PieceType::Rook,
+            PieceType::Bishop,
+            PieceType::Knight,
+            PieceType::Pawn,
         ];
         for &color in &colors {
             let ci = color_index(color);
@@ -171,7 +175,10 @@ impl Board {
                 let mut bb = self.bitboards[ci][pi];
                 while bb != 0 {
                     let sq = bb.trailing_zeros() as u8;
-                    self.mailbox[sq as usize] = Some(Piece { piece_type: pt, color });
+                    self.mailbox[sq as usize] = Some(Piece {
+                        piece_type: pt,
+                        color,
+                    });
                     bb &= bb - 1;
                 }
             }
@@ -235,7 +242,7 @@ impl Board {
     /// Check if a square is attacked by a given color
     pub fn is_square_attacked(&self, square: u8, by_color: Color) -> bool {
         let ci = color_index(by_color);
-        
+
         // Knight attacks
         if knight_attacks(square) & self.bitboards[ci][4] != 0 {
             return true;
@@ -308,9 +315,15 @@ impl Board {
     pub fn has_insufficient_material(&self) -> bool {
         // If any pawns, rooks, or queens exist, material is sufficient
         for ci in 0..2 {
-            if self.bitboards[ci][1] != 0 { return false; } // Queens
-            if self.bitboards[ci][2] != 0 { return false; } // Rooks
-            if self.bitboards[ci][5] != 0 { return false; } // Pawns
+            if self.bitboards[ci][1] != 0 {
+                return false;
+            } // Queens
+            if self.bitboards[ci][2] != 0 {
+                return false;
+            } // Rooks
+            if self.bitboards[ci][5] != 0 {
+                return false;
+            } // Pawns
         }
 
         let white_knights = self.bitboards[0][4].count_ones();
@@ -453,11 +466,21 @@ impl Board {
         // Castling rights
         fen.push(' ');
         let mut castling = String::new();
-        if self.castling_rights.white_kingside { castling.push('K'); }
-        if self.castling_rights.white_queenside { castling.push('Q'); }
-        if self.castling_rights.black_kingside { castling.push('k'); }
-        if self.castling_rights.black_queenside { castling.push('q'); }
-        if castling.is_empty() { castling.push('-'); }
+        if self.castling_rights.white_kingside {
+            castling.push('K');
+        }
+        if self.castling_rights.white_queenside {
+            castling.push('Q');
+        }
+        if self.castling_rights.black_kingside {
+            castling.push('k');
+        }
+        if self.castling_rights.black_queenside {
+            castling.push('q');
+        }
+        if castling.is_empty() {
+            castling.push('-');
+        }
         fen.push_str(&castling);
 
         // En passant
@@ -468,7 +491,10 @@ impl Board {
         }
 
         // Halfmove clock and fullmove number
-        fen.push_str(&format!(" {} {}", self.halfmove_clock, self.fullmove_number));
+        fen.push_str(&format!(
+            " {} {}",
+            self.halfmove_clock, self.fullmove_number
+        ));
 
         fen
     }
@@ -523,8 +549,14 @@ pub fn knight_attacks(square: u8) -> u64 {
     let file = file_of(square) as i8;
 
     let offsets: [(i8, i8); 8] = [
-        (-2, -1), (-2, 1), (-1, -2), (-1, 2),
-        (1, -2), (1, 2), (2, -1), (2, 1),
+        (-2, -1),
+        (-2, 1),
+        (-1, -2),
+        (-1, 2),
+        (1, -2),
+        (1, 2),
+        (2, -1),
+        (2, 1),
     ];
 
     for (dr, df) in offsets {
@@ -545,7 +577,9 @@ pub fn king_attacks(square: u8) -> u64 {
 
     for dr in -1..=1 {
         for df in -1..=1 {
-            if dr == 0 && df == 0 { continue; }
+            if dr == 0 && df == 0 {
+                continue;
+            }
             let r = rank + dr;
             let f = file + df;
             if r >= 0 && r < 8 && f >= 0 && f < 8 {

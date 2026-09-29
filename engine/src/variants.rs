@@ -63,16 +63,16 @@ impl GameVariant {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantState {
     pub variant: GameVariant,
-    
+
     /// Three-Check: track number of checks given by each side
     pub white_checks: u8,
     pub black_checks: u8,
-    
+
     /// Crazyhouse: piece reserves (captured pieces available for dropping)
     /// [pawns, knights, bishops, rooks, queens]
     pub white_reserve: [u8; 5],
     pub black_reserve: [u8; 5],
-    
+
     /// Chess960: original rook files for castling
     pub chess960_king_file: Option<u8>,
     pub chess960_rook_a_file: Option<u8>,
@@ -101,7 +101,7 @@ impl VariantState {
             ..Default::default()
         }
     }
-    
+
     /// Check if the game is won by variant-specific rules
     pub fn check_variant_win(&self, king_sq: u8, is_check: bool) -> Option<String> {
         match self.variant {
@@ -128,7 +128,7 @@ impl VariantState {
             _ => None,
         }
     }
-    
+
     /// Get piece reserve index for Crazyhouse
     pub fn piece_reserve_index(piece_name: &str) -> Option<usize> {
         match piece_name.to_lowercase().as_str() {
@@ -140,10 +140,12 @@ impl VariantState {
             _ => None,
         }
     }
-    
+
     /// Add a captured piece to reserve (Crazyhouse)
     pub fn add_to_reserve(&mut self, is_white_capturing: bool, piece_name: &str) {
-        if self.variant != GameVariant::Crazyhouse { return; }
+        if self.variant != GameVariant::Crazyhouse {
+            return;
+        }
         if let Some(idx) = Self::piece_reserve_index(piece_name) {
             if is_white_capturing {
                 self.white_reserve[idx] += 1;
@@ -152,12 +154,18 @@ impl VariantState {
             }
         }
     }
-    
+
     /// Remove a piece from reserve for dropping (Crazyhouse)
     pub fn remove_from_reserve(&mut self, is_white: bool, piece_name: &str) -> bool {
-        if self.variant != GameVariant::Crazyhouse { return false; }
+        if self.variant != GameVariant::Crazyhouse {
+            return false;
+        }
         if let Some(idx) = Self::piece_reserve_index(piece_name) {
-            let reserve = if is_white { &mut self.white_reserve } else { &mut self.black_reserve };
+            let reserve = if is_white {
+                &mut self.white_reserve
+            } else {
+                &mut self.black_reserve
+            };
             if reserve[idx] > 0 {
                 reserve[idx] -= 1;
                 return true;
@@ -165,10 +173,12 @@ impl VariantState {
         }
         false
     }
-    
+
     /// Record a check (Three-Check)
     pub fn record_check(&mut self, checking_side_is_white: bool) {
-        if self.variant != GameVariant::ThreeCheck { return; }
+        if self.variant != GameVariant::ThreeCheck {
+            return;
+        }
         if checking_side_is_white {
             self.white_checks += 1;
         } else {
@@ -187,11 +197,35 @@ pub struct VariantInfo {
 
 pub fn list_variants() -> Vec<VariantInfo> {
     vec![
-        VariantInfo { id: "standard".into(), name: "Standard".into(), description: GameVariant::Standard.description().into() },
-        VariantInfo { id: "chess960".into(), name: "Chess960".into(), description: GameVariant::Chess960.description().into() },
-        VariantInfo { id: "kingofthehill".into(), name: "King of the Hill".into(), description: GameVariant::KingOfTheHill.description().into() },
-        VariantInfo { id: "threecheck".into(), name: "Three-Check".into(), description: GameVariant::ThreeCheck.description().into() },
-        VariantInfo { id: "atomic".into(), name: "Atomic".into(), description: GameVariant::Atomic.description().into() },
-        VariantInfo { id: "crazyhouse".into(), name: "Crazyhouse".into(), description: GameVariant::Crazyhouse.description().into() },
+        VariantInfo {
+            id: "standard".into(),
+            name: "Standard".into(),
+            description: GameVariant::Standard.description().into(),
+        },
+        VariantInfo {
+            id: "chess960".into(),
+            name: "Chess960".into(),
+            description: GameVariant::Chess960.description().into(),
+        },
+        VariantInfo {
+            id: "kingofthehill".into(),
+            name: "King of the Hill".into(),
+            description: GameVariant::KingOfTheHill.description().into(),
+        },
+        VariantInfo {
+            id: "threecheck".into(),
+            name: "Three-Check".into(),
+            description: GameVariant::ThreeCheck.description().into(),
+        },
+        VariantInfo {
+            id: "atomic".into(),
+            name: "Atomic".into(),
+            description: GameVariant::Atomic.description().into(),
+        },
+        VariantInfo {
+            id: "crazyhouse".into(),
+            name: "Crazyhouse".into(),
+            description: GameVariant::Crazyhouse.description().into(),
+        },
     ]
 }
