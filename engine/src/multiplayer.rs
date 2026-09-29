@@ -300,6 +300,18 @@ pub async fn create_room(
     let room_code = generate_room_code();
     let now = now_epoch();
     let host_color = resolve_host_color(body.host_color.as_deref());
+    // Only known variants: the name is shown to every lobby viewer.
+    let variant = body
+        .variant
+        .as_deref()
+        .unwrap_or("standard")
+        .trim()
+        .to_lowercase();
+    if crate::variants::GameVariant::from_str(&variant).is_none() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Unknown variant"
+        }));
+    }
 
     let room = MultiplayerRoom {
         room_id: room_id.clone(),
@@ -310,10 +322,7 @@ pub async fn create_room(
         host_name: body.player_name.clone(),
         guest_name: None,
         host_color: host_color.clone(),
-        variant: body
-            .variant
-            .clone()
-            .unwrap_or_else(|| "standard".to_string()),
+        variant: variant.clone(),
         time_control: body.time_control.clone(),
         status: RoomStatus::Waiting,
         created_at: now,
@@ -338,10 +347,7 @@ pub async fn create_room(
         guest_name: None,
         game_id: None,
         host_color: host_color.clone(),
-        variant: body
-            .variant
-            .clone()
-            .unwrap_or_else(|| "standard".to_string()),
+        variant,
         spectator_count: 0,
     })
 }
