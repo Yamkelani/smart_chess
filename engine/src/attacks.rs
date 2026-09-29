@@ -50,14 +50,22 @@ pub fn attackers_of_square(board: &Board, square: u8, by_color: Color) -> Vec<u8
             // A white pawn on file f attacks (f-1, rank+1) and (f+1, rank+1).
             // So white pawns that attack `square` are below it, diagonally.
             let mut bb = 0u64;
-            if file_of(square) > 0 { bb |= bit(square) >> 9; }
-            if file_of(square) < 7 { bb |= bit(square) >> 7; }
+            if file_of(square) > 0 {
+                bb |= bit(square) >> 9;
+            }
+            if file_of(square) < 7 {
+                bb |= bit(square) >> 7;
+            }
             bb & pawn_bb
         }
         Color::Black => {
             let mut bb = 0u64;
-            if file_of(square) > 0 { bb |= bit(square) << 7; }
-            if file_of(square) < 7 { bb |= bit(square) << 9; }
+            if file_of(square) > 0 {
+                bb |= bit(square) << 7;
+            }
+            if file_of(square) < 7 {
+                bb |= bit(square) << 9;
+            }
             bb & pawn_bb
         }
     };
@@ -142,9 +150,18 @@ pub fn compute_attack_map(board: &Board, fen: String) -> AttackMapResponse {
 
             let control = match (wc, bc) {
                 (0, 0) => "neutral",
-                (_, 0) => { white_controlled += 1; "white" }
-                (0, _) => { black_controlled += 1; "black" }
-                _      => { contested_count  += 1; "contested" }
+                (_, 0) => {
+                    white_controlled += 1;
+                    "white"
+                }
+                (0, _) => {
+                    black_controlled += 1;
+                    "black"
+                }
+                _ => {
+                    contested_count += 1;
+                    "contested"
+                }
             };
 
             // Hanging piece detection: a piece is hanging if it's attacked more

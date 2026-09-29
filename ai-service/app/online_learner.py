@@ -14,29 +14,30 @@ from real gameplay. When games are played against the AI:
 This means the AI genuinely learns from every game played against it.
 """
 
-import asyncio
+import os
+import threading
+import time
+from dataclasses import dataclass, field
+
 import chess
 import numpy as np
-import os
-import time
-import threading
 import torch
 import torch.nn.functional as F
-import torch.optim as optim
-from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from torch import optim
 
+from app.chess_env import MOVES_PER_SQUARE, board_to_tensor, move_to_index
 from app.config import (
-    TRAINING_LEARNING_RATE, TRAINING_WEIGHT_DECAY,
-    TRAINING_DATA_DIR, MODEL_DIR, NN_POLICY_OUTPUT,
-    ONLINE_LEARNING_BATCH_SIZE, ONLINE_LEARNING_MIN_POSITIONS,
-    ONLINE_LEARNING_EPOCHS, ONLINE_BUFFER_SIZE,
+    ONLINE_BUFFER_SIZE,
+    ONLINE_LEARNING_BATCH_SIZE,
+    ONLINE_LEARNING_EPOCHS,
+    ONLINE_LEARNING_MIN_POSITIONS,
+    TRAINING_DATA_DIR,
+    TRAINING_LEARNING_RATE,
+    TRAINING_WEIGHT_DECAY,
 )
-from app.chess_env import board_to_tensor, move_to_index, MOVES_PER_SQUARE
-from app.self_play import TrainingExample, ReplayBuffer
 from app.model import ChessNetManager
 from app.monitoring import ModelMonitor
+from app.self_play import ReplayBuffer, TrainingExample
 
 
 @dataclass
@@ -53,7 +54,7 @@ class GameSession:
     """Tracks positions from an active game for learning."""
     game_id: str
     player_color: str              # "white" or "black"
-    positions: List[PositionRecord] = field(default_factory=list)
+    positions: list[PositionRecord] = field(default_factory=list)
     start_time: float = 0.0
     is_complete: bool = False
 
@@ -67,14 +68,14 @@ class OnlineLearner:
     that grows over time, giving the AI genuine learning capability.
     """
 
-    def __init__(self, manager: ChessNetManager, monitor: Optional[ModelMonitor] = None):
+    def __init__(self, manager: ChessNetManager, monitor: ModelMonitor | None = None):
         self.manager = manager
         self.model = manager.get_model()
         self.device = manager.device
         self.monitor = monitor
 
         # Active game sessions
-        self.sessions: Dict[str, GameSession] = {}
+        self.sessions: dict[str, GameSession] = {}
 
         # Persistent replay buffer for online learning
         self.replay_buffer = ReplayBuffer(max_size=ONLINE_BUFFER_SIZE)
@@ -112,7 +113,7 @@ class OnlineLearner:
         print(f"[OnlineLearner] tracking game {game_id[:8]}...")
 
     def record_position(self, game_id: str, fen: str,
-                        mcts_policy: Optional[List[Tuple]] = None):
+                        mcts_policy: list[tuple] | None = None):
         """
         Record a position from an ongoing game.
 
@@ -359,7 +360,7 @@ class OnlineLearner:
 
         except Exception as e:
             import logging as _log
-            _log.getLogger("ai-service").error("[OnlineLearner] training error: %s", e)
+            _log.getLogger("ai-service").exception("[OnlineLearner] training error")
             return {"trained": False, "error": str(e)}
         finally:
             self.training_in_progress = False
@@ -368,7 +369,7 @@ class OnlineLearner:
     # ---- Helpers ----
 
     @staticmethod
-    def _extract_winner(result: str) -> Optional[str]:
+    def _extract_winner(result: str) -> str | None:
         """Extract winner color from engine status like 'Checkmate(white)'."""
         import re
         m = re.search(r'\(\s*(white|black)\s*\)', result, re.IGNORECASE)
@@ -401,7 +402,7 @@ class OnlineLearner:
         return 0.0
 
     def complete_game_with_winner(self, game_id: str, result: str,
-                                  winner: Optional[str]) -> dict:
+                                  winner: str | None) -> dict:
         """
         Complete a game with explicit winner information.
 
@@ -497,7 +498,7 @@ class OnlineLearner:
         try:
             os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
             self.replay_buffer.save(self._buffer_path())
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - saving is best-effort; never fail the caller
             print(f"[OnlineLearner] failed to save buffer: {e}")
 
     def _load_buffer(self):
