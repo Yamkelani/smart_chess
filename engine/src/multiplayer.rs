@@ -223,7 +223,9 @@ const MAX_NAME_LEN: usize = 32;
 /// acceptable (a trusted network, or once identity is authenticated).
 fn leaderboard_writes_enabled() -> bool {
     matches!(
-        std::env::var("ENABLE_LEADERBOARD_WRITES").unwrap_or_default().as_str(),
+        std::env::var("ENABLE_LEADERBOARD_WRITES")
+            .unwrap_or_default()
+            .as_str(),
         "1" | "true" | "TRUE" | "yes"
     )
 }
@@ -735,9 +737,11 @@ pub async fn update_leaderboard(
     let name = sanitise_name(&body.player_name);
     let mut lb = match mp_state.leaderboard.lock() {
         Ok(g) => g,
-        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": "Internal lock error"
-        })),
+        Err(_) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Internal lock error"
+            }))
+        }
     };
 
     let entry = lb.iter_mut().find(|e| e.player_id == body.player_id);
@@ -754,8 +758,7 @@ pub async fn update_leaderboard(
             // Rating is derived here, never taken from the request. Expected
             // score is against a nominal average opponent, since this endpoint
             // does not know who was played.
-            let expected = 1.0
-                / (1.0 + 10f64.powf((INITIAL_RATING - e.rating) as f64 / 400.0));
+            let expected = 1.0 / (1.0 + 10f64.powf((INITIAL_RATING - e.rating) as f64 / 400.0));
             e.rating += (RATING_K as f64 * (delta - expected)).round() as i32;
             e.rating = e.rating.clamp(100, 4000);
             e.rating
