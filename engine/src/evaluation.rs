@@ -755,6 +755,40 @@ pub fn search_best_move_timed(
     Some((best_move, best_score))
 }
 
+/// Wall-clock budget for the multi-PV search.
+///
+/// `alpha_beta_with_pv` has no `SearchContext`, so it carries its own small
+/// deadline guard.  A limit of 0 means unlimited, matching `SearchContext`.
+struct PvDeadline {
+    start: Instant,
+    time_limit_ms: u64,
+    nodes: u64,
+    stopped: bool,
+}
+
+impl PvDeadline {
+    fn new(time_limit_ms: u64) -> Self {
+        Self {
+            start: Instant::now(),
+            time_limit_ms,
+            nodes: 0,
+            stopped: false,
+        }
+    }
+
+    /// Check the clock every 2048 nodes, as the main search does.
+    #[inline]
+    fn check_time(&mut self) {
+        if self.time_limit_ms == 0 {
+            return;
+        }
+        self.nodes += 1;
+        if self.nodes & 2047 == 0 && self.start.elapsed().as_millis() as u64 >= self.time_limit_ms {
+            self.stopped = true;
+        }
+    }
+}
+
 /// Multi-PV search: return the top N moves with their evaluations and principal variations.
 /// Search a position with alpha-beta while also returning the principal variation.
 fn alpha_beta_with_pv(
@@ -763,10 +797,12 @@ fn alpha_beta_with_pv(
     mut alpha: i32,
     beta: i32,
     max_pv_len: usize,
+    limit: &mut PvDeadline,
 ) -> (i32, Vec<crate::moves::Move>) {
     use crate::moves::{generate_legal_moves, make_move, Move};
 
-    if depth == 0 || max_pv_len == 0 {
+    limit.check_time();
+    if depth == 0 || max_pv_len == 0 || limit.stopped {
         return (evaluate(board), Vec::new());
     }
 
@@ -787,8 +823,19 @@ fn alpha_beta_with_pv(
                 -beta,
                 -alpha,
                 max_pv_len.saturating_sub(1),
+                limit,
             );
             let score = -child_score;
+
+            if limit.stopped {
+                // Out of time: keep whatever this node already established.
+                if best_pv.is_empty() {
+                    best_score = score;
+                    best_pv.push(*mv);
+                    best_pv.extend(child_pv);
+                }
+                break;
+            }
 
             if score > best_score {
                 best_score = score;
@@ -809,11 +856,18 @@ fn alpha_beta_with_pv(
     (best_score, best_pv)
 }
 
-/// Each result is (move, score, pv) where pv is a Vec<Move> showing the expected continuation.
-pub fn search_top_moves(
+/// Multi-PV search with an explicit wall-clock budget.
+///
+/// Each result is (move, score, pv) where pv shows the expected continuation.
+/// `time_limit_ms` of 0 means unlimited; every caller that serves a request
+/// should pass a real budget, since this scores *every* legal move.
+/// On timeout the moves scored so far are returned, so callers always receive a
+/// usable (if shorter) list.
+pub fn search_top_moves_timed(
     board: &Board,
     depth: u8,
     num_moves: usize,
+    time_limit_ms: u64,
 ) -> Vec<(crate::moves::Move, i32, Vec<crate::moves::Move>)> {
     use crate::moves::{generate_legal_moves, make_move, Move};
 
@@ -821,6 +875,8 @@ pub fn search_top_moves(
     if moves.is_empty() {
         return vec![];
     }
+
+    let mut limit = PvDeadline::new(time_limit_ms);
 
     // Score every legal move and capture its principal variation in the same search.
     let mut scored: Vec<(Move, i32, Vec<Move>)> = Vec::new();
@@ -833,11 +889,17 @@ pub fn search_top_moves(
                 i32::MIN + 1,
                 i32::MAX - 1,
                 7,
+                &mut limit,
             );
             let score = -child_score;
             let mut pv = vec![*mv];
             pv.extend(child_pv);
             scored.push((*mv, score, pv));
+        }
+        if limit.stopped {
+            // Out of time.  Scores for the remaining root moves would be
+            // unsearched guesses, so report only what was actually examined.
+            break;
         }
     }
 

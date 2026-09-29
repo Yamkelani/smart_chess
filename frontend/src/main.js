@@ -45,6 +45,7 @@ class ChessGame {
     this.capturedWhite = []; // white pieces captured (by black)
     this.capturedBlack = []; // black pieces captured (by white)
     this.status = 'Active';
+    this.winner = null;
     this.sideToMove = 'white';
     this.isCheck = false;
     this.playerColor = 'white';
@@ -916,6 +917,7 @@ class ChessGame {
     const attackBtn = document.getElementById('btn-attack-map');
     if (attackBtn) { attackBtn.textContent = 'Attack Map'; attackBtn.classList.remove('active'); }
     this.status = 'Active';
+    this.winner = null;
     this.playerColor = document.getElementById('color-select').value;
     this.useAI = document.getElementById('use-ai').checked;
 
@@ -1194,6 +1196,7 @@ class ChessGame {
       this.legalMoves = data.legal_moves;
       this.isCheck = data.is_check;
       this.status = data.status;
+      this.winner = data.winner ?? null;
       this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
 
       // Let animation play, then sync pieces
@@ -1317,6 +1320,7 @@ class ChessGame {
           this.legalMoves = gameData.legal_moves;
           this.isCheck = gameData.is_check;
           this.status = gameData.status;
+          this.winner = gameData.winner ?? null;
           this.sideToMove = gameData.side_to_move;
 
           this.board.setPieces(this.pieces);
@@ -1351,6 +1355,7 @@ class ChessGame {
           this.legalMoves = gameData.legal_moves;
           this.isCheck = gameData.is_check;
           this.status = gameData.status;
+          this.winner = gameData.winner ?? null;
           this.sideToMove = gameData.side_to_move;
           const san2 = this._uciToSAN(engineResult.move_uci, prevPieces2, gameData.pieces, gameData.is_check, gameData.status, false);
           this.moveHistory.push(san2);
@@ -1454,6 +1459,7 @@ class ChessGame {
     this.legalMoves = data.legal_moves;
     this.isCheck = data.is_check;
     this.status = data.status;
+    this.winner = data.winner ?? null;
     this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
 
     // Log FEN for review
@@ -1795,6 +1801,7 @@ class ChessGame {
       this.legalMoves = data.legal_moves;
       this.isCheck = data.is_check;
       this.status = data.status;
+      this.winner = data.winner ?? null;
       this.sideToMove = this.moveHistory.length % 2 === 0 ? 'white' : 'black';
       this.selectedSquare = null;
 
@@ -2160,7 +2167,7 @@ class ChessGame {
   _onGameEnd() {
     // Signal AI learning
     if (this.useAI) {
-      this.api.gameComplete(this.gameId, this.status, this.playerColor);
+      this.api.gameComplete(this.gameId, this.status, this.playerColor, this.winner);
     }
 
     // Determine result
@@ -2404,6 +2411,7 @@ class ChessGame {
       this.sideToMove = puzzle.fen.includes(' w ') ? 'white' : 'black';
       this.playerColor = this.sideToMove;
       this.status = 'Active';
+      this.winner = null;
       this.moveHistory = [];
 
       this.board.clearHighlights();
@@ -2729,6 +2737,7 @@ class ChessGame {
       this.sideToMove = drill.fen.split(' ')[1] === 'w' ? 'white' : 'black';
       this.playerColor = this.sideToMove;
       this.status = 'Active';
+      this.winner = null;
       this.moveHistory = [];
 
       this.board.clearHighlights();
@@ -3001,6 +3010,7 @@ class ChessGame {
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
       this.status = 'Active';
+      this.winner = null;
       this.moveHistory = [];
       this._moveHistoryUCI = [];
       this._fenLog = [this.fen];
@@ -3152,6 +3162,7 @@ class ChessGame {
       this.sideToMove = parts[1] === 'w' ? 'white' : 'black';
       this.playerColor = this.sideToMove;
       this.status = 'Active';
+      this.winner = null;
       this.moveHistory = [];
       this._moveHistoryUCI = [];
       this._fenLog = [this.fen];
@@ -3674,6 +3685,7 @@ class ChessGame {
     this._stopTimer();
     const winner = this.playerColor === 'white' ? 'Black' : 'White';
     this.status = `${winner} wins by resignation`;
+    this.winner = winner.toLowerCase();
     // Notify engine so server state is consistent
     if (this.gameId) {
       this.api.resignGame(this.gameId, this.playerColor).catch(() => {});
@@ -3700,6 +3712,7 @@ class ChessGame {
       if (accept) {
         this._stopTimer();
         this.status = 'Draw by agreement';
+        this.winner = null;
         if (this.gameId) {
           this.api.drawGame(this.gameId).catch(() => {});
         }
@@ -3714,6 +3727,7 @@ class ChessGame {
       if (accepted) {
         this._stopTimer();
         this.status = 'Draw by agreement';
+        this.winner = null;
         if (this.gameId) {
           this.api.drawGame(this.gameId).catch(() => {});
         }
@@ -3946,6 +3960,7 @@ class ChessGame {
           if (this.whiteTime <= 0) {
             this._stopTimer();
             this.status = 'White lost on time';
+            this.winner = 'black';
             this._showGameOver();
             this._onGameEnd();
             return;
@@ -3955,6 +3970,7 @@ class ChessGame {
           if (this.blackTime <= 0) {
             this._stopTimer();
             this.status = 'Black lost on time';
+            this.winner = 'white';
             this._showGameOver();
             this._onGameEnd();
             return;
