@@ -4136,19 +4136,28 @@ class ChessGame {
         container.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;padding:8px">No open rooms. Create one!</div>';
         return;
       }
-      container.innerHTML = rooms.map(r => `
-        <div style="display:flex;align-items:center;padding:8px;border:1px solid var(--border-glow);border-radius:8px;margin-bottom:6px;cursor:pointer" 
-          data-code="${r.room_code}" class="mp-room-item">
-          <span style="flex:1;font-weight:600">${r.host_name}</span>
-          <span style="font-size:0.75rem;color:var(--text-secondary)">${r.variant}</span>
-          <span style="font-family:JetBrains Mono;font-size:0.8rem;margin-left:8px;color:var(--accent-cyan)">${r.room_code}</span>
-        </div>
-      `).join('');
-      container.querySelectorAll('.mp-room-item').forEach(el => {
-        el.addEventListener('click', async () => {
-          try { await this.multiplayer.joinRoom(el.dataset.code); } catch (e) { alert(e.message); }
+      // Room fields are player-supplied: build nodes with textContent so they
+      // are never parsed as HTML.
+      container.replaceChildren(...rooms.map(r => {
+        const item = document.createElement('div');
+        item.className = 'mp-room-item';
+        item.style.cssText = 'display:flex;align-items:center;padding:8px;border:1px solid var(--border-glow);border-radius:8px;margin-bottom:6px;cursor:pointer';
+        const span = (text, css) => {
+          const s = document.createElement('span');
+          s.style.cssText = css;
+          s.textContent = text ?? '';
+          return s;
+        };
+        item.append(
+          span(r.host_name, 'flex:1;font-weight:600'),
+          span(r.variant, 'font-size:0.75rem;color:var(--text-secondary)'),
+          span(r.room_code, 'font-family:JetBrains Mono;font-size:0.8rem;margin-left:8px;color:var(--accent-cyan)'),
+        );
+        item.addEventListener('click', async () => {
+          try { await this.multiplayer.joinRoom(r.room_code); } catch (e) { alert(e.message); }
         });
-      });
+        return item;
+      }));
     } catch (e) { /* rooms not available */ }
   }
 
