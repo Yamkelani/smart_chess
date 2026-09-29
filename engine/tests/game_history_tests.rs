@@ -59,7 +59,10 @@ fn undo_can_rewind_several_moves() {
 #[test]
 fn undo_beyond_the_start_is_rejected() {
     let mut game = fools_mate();
-    assert!(game.undo_moves(5).is_err(), "cannot rewind past the first move");
+    assert!(
+        game.undo_moves(5).is_err(),
+        "cannot rewind past the first move"
+    );
     // Rejected undo must not have mutated anything.
     assert_eq!(game.move_history.len(), 4);
     assert_eq!(game.status, GameStatus::Checkmate("black".to_string()));
@@ -84,7 +87,10 @@ fn loading_an_arbitrary_position_resets_history_and_marks_analysis() {
     assert_eq!(game.hash_history.len(), 1);
     assert_eq!(game.board.to_fen(), start);
     // A hand-placed position cannot yield a rated result.
-    assert!(game.is_analysis, "arbitrary position must mark the game unranked");
+    assert!(
+        game.is_analysis,
+        "arbitrary position must mark the game unranked"
+    );
     assert_eq!(game.status, GameStatus::Active);
 }
 
@@ -93,7 +99,8 @@ fn repetition_detection_is_not_poisoned_by_a_position_load() {
     // Before the fix, hash_history retained hashes from the abandoned line, so
     // repetition counts were computed against positions from another game.
     let mut game = fools_mate();
-    game.load_position(&Board::new().to_fen()).expect("valid FEN");
+    game.load_position(&Board::new().to_fen())
+        .expect("valid FEN");
 
     // Shuffle knights out and back twice; the third repetition ends the game.
     // If stale hashes survived, the count would be wrong.
