@@ -9,21 +9,21 @@ Also implements online learning: the AI genuinely learns from every
 game played, recording positions and training after each game completes.
 """
 
-import os
 import asyncio
-import time
 import logging
-import httpx
-import chess
-import numpy as np
-import torch
+import os
+import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+
+import chess
+import httpx
+import numpy as np
+import torch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from pydantic import BaseModel
 
 # ---- Structured logging ----
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -35,30 +35,33 @@ logging.basicConfig(
 logger = logging.getLogger("ai-service")
 
 from app.config import (
-    AI_SERVICE_HOST, AI_SERVICE_PORT, ENGINE_URL,
-    DIFFICULTY_LEVELS, DIFFICULTY_PROFILES, MCTS_SIMULATIONS, MCTS_TEMPERATURE,
-    MAX_MCTS_SIMULATIONS
+    AI_SERVICE_HOST,
+    AI_SERVICE_PORT,
+    DIFFICULTY_LEVELS,
+    DIFFICULTY_PROFILES,
+    ENGINE_URL,
+    MAX_MCTS_SIMULATIONS,
+    MCTS_TEMPERATURE,
 )
-from app.model import ChessNetManager
 from app.mcts import MCTS
-
+from app.model import ChessNetManager
 
 # ---- Pydantic Models ----
 
 class AIMoveRequest(BaseModel):
     fen: str
     difficulty: str = "intermediate"
-    temperature: Optional[float] = None
-    game_id: Optional[str] = None
-    player_color: Optional[str] = "white"
-    personality: Optional[str] = "default"
+    temperature: float | None = None
+    game_id: str | None = None
+    player_color: str | None = "white"
+    personality: str | None = "default"
 
 class AIMoveResponse(BaseModel):
     move: str
     fen_before: str
     evaluation: float
     simulations: int
-    top_moves: List[Dict]
+    top_moves: list[dict]
 
 class GameCompleteRequest(BaseModel):
     game_id: str
@@ -67,24 +70,24 @@ class GameCompleteRequest(BaseModel):
 
 class EvalRequest(BaseModel):
     fen: str
-    num_simulations: Optional[int] = 200
+    num_simulations: int | None = 200
 
 class EvalResponse(BaseModel):
     fen: str
     value: float
-    policy_top: List[Dict]
+    policy_top: list[dict]
 
 class GamePlayRequest(BaseModel):
-    game_id: Optional[str] = None
+    game_id: str | None = None
     difficulty: str = "intermediate"
     player_color: str = "white"  # "white" or "black"
 
 class GamePlayResponse(BaseModel):
     game_id: str
     fen: str
-    ai_move: Optional[str] = None
-    pieces: List[Dict]
-    legal_moves: List[str]
+    ai_move: str | None = None
+    pieces: list[dict]
+    legal_moves: list[str]
     status: str
     is_check: bool
 
@@ -106,8 +109,8 @@ class HealthResponse(BaseModel):
 
 
 # ---- Globals ----
-manager: Optional[ChessNetManager] = None
-http_client: Optional[httpx.AsyncClient] = None
+manager: ChessNetManager | None = None
+http_client: httpx.AsyncClient | None = None
 online_learner = None  # OnlineLearner instance
 model_monitor = None   # ModelMonitor instance
 
@@ -174,7 +177,7 @@ app.add_middleware(
 )
 
 # ---- Simple in-memory rate limiter ----
-_rate_buckets: Dict[str, list] = defaultdict(list)
+_rate_buckets: dict[str, list] = defaultdict(list)
 _RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MIN", "120"))  # requests per minute per IP
 _RATE_WINDOW = 60.0  # seconds
 _rate_last_cleanup = time.time()
@@ -275,7 +278,7 @@ def run_mcts(fen: str, num_simulations: int,
 
 
 def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str,
-                            style_bias: str = None) -> dict:
+                            style_bias: str | None = None) -> dict:
     """
     Post-process an MCTS result to simulate human-like play at lower difficulty.
 
@@ -317,7 +320,7 @@ def apply_difficulty_filter(mcts_result: dict, difficulty: str, fen: str,
                 board.pop()
                 if not is_capture and not gives_check:
                     non_tactical.append(m)
-            except Exception:
+            except Exception:  # noqa: BLE001 - unparseable candidate: keep it rather than drop it
                 non_tactical.append(m)
         # Only filter if we still have at least one candidate left
         if non_tactical:
@@ -385,7 +388,7 @@ def _apply_style_bias(candidates: list, board: chess.Board, style: str) -> list:
                     king_sq = board.king(board.turn)
                     if king_sq is not None and abs(chess.square_file(move_obj.from_square) - chess.square_file(king_sq)) <= 1:
                         bonus -= 0.10  # Penalise weakening king shelter
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - style bias is best-effort; score without it
             pass
         scored.append((m, m.get("probability", 0) + bonus))
 
@@ -395,7 +398,7 @@ def _apply_style_bias(candidates: list, board: chess.Board, style: str) -> list:
 
 # ---- Engine Communication ----
 
-async def engine_new_game(fen: Optional[str] = None) -> dict:
+async def engine_new_game(fen: str | None = None) -> dict:
     """Create a new game on the Rust engine."""
     payload = {"fen": fen} if fen else {}
     resp = await http_client.post("/game/new", json=payload)
@@ -469,7 +472,7 @@ async def ai_move(req: AIMoveRequest):
             top_moves=result["top_moves"]
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/ai/game-complete")
@@ -481,7 +484,7 @@ async def game_complete(req: GameCompleteRequest):
         result = online_learner.complete_game(req.game_id, req.result)
         return result
     except Exception as e:
-        logger.error("[game-complete] error: %s", e)
+        logger.exception("[game-complete] error")
         return {"learned": False, "error": str(e)}
 
 
@@ -514,7 +517,7 @@ async def ai_evaluate(req: EvalRequest):
 
         return EvalResponse(fen=req.fen, value=round(value.item(), 4), policy_top=top)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/game/play", response_model=GamePlayResponse)
@@ -539,7 +542,7 @@ async def start_game(req: GamePlayRequest):
         if req.player_color == "black":
             sims = get_simulations(req.difficulty)
             result = await asyncio.to_thread(run_mcts, engine_data["fen"], sims, 0.5)
-            move_data = await engine_make_move(game_id, result["move"])
+            await engine_make_move(game_id, result["move"])
             ai_move_uci = result["move"]
 
             # Record AI's position + MCTS policy for learning
@@ -563,7 +566,7 @@ async def start_game(req: GamePlayRequest):
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Engine communication error: {e}")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/game/{game_id}/play", response_model=GamePlayResponse)
@@ -640,10 +643,10 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-def _determine_winner(status: str, side_to_move: Optional[str] = None) -> Optional[str]:
+def _determine_winner(status: str, side_to_move: str | None = None) -> str | None:
     """Determine the winner from a game status string."""
     status_lower = status.lower()
     if "checkmate" in status_lower:
@@ -752,11 +755,11 @@ async def list_difficulties():
 
 class TutorAskRequest(BaseModel):
     question: str
-    fen: Optional[str] = None
+    fen: str | None = None
 
 class TutorAskResponse(BaseModel):
     answer: str
-    category: Optional[str] = None
+    category: str | None = None
 
 @app.post("/ai/tutor/ask", response_model=TutorAskResponse)
 async def tutor_ask(req: TutorAskRequest):
@@ -800,7 +803,7 @@ async def tutor_analyze(req: EvalRequest):
 class PuzzleListRequest(BaseModel):
     min_rating: int = 0
     max_rating: int = 3000
-    theme: Optional[str] = None
+    theme: str | None = None
     limit: int = 10
 
 class PuzzleMoveRequest(BaseModel):
@@ -848,8 +851,8 @@ async def puzzle_themes():
 # ═══════════════════════════════════════════════════
 
 class ReviewRequest(BaseModel):
-    fens: List[str]
-    moves: List[str]
+    fens: list[str]
+    moves: list[str]
 
 @app.post("/ai/review")
 async def review_game(req: ReviewRequest):
@@ -921,7 +924,7 @@ async def review_game(req: ReviewRequest):
             "total_moves": len(evaluations),
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # ═══════════════════════════════════════════════════
@@ -992,6 +995,7 @@ async def pgn_import(req: PGNImportRequest):
     """
     try:
         import io
+
         import chess.pgn
 
         pgn_io = io.StringIO(req.pgn.strip())
@@ -1023,7 +1027,7 @@ async def pgn_import(req: PGNImportRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"PGN parse error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"PGN parse error: {e!s}") from e
 
 
 # ═══════════════════════════════════════════════════
