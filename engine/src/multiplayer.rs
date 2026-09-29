@@ -312,6 +312,7 @@ pub async fn create_room(
             "error": "Unknown variant"
         }));
     }
+    let host_name = sanitise_name(&body.player_name);
 
     let room = MultiplayerRoom {
         room_id: room_id.clone(),
@@ -319,7 +320,7 @@ pub async fn create_room(
         game_id: None,
         host_id: body.player_id.clone(),
         guest_id: None,
-        host_name: body.player_name.clone(),
+        host_name: host_name.clone(),
         guest_name: None,
         host_color: host_color.clone(),
         variant: variant.clone(),
@@ -343,7 +344,7 @@ pub async fn create_room(
         room_id,
         room_code,
         status: "Waiting".to_string(),
-        host_name: body.player_name.clone(),
+        host_name,
         guest_name: None,
         game_id: None,
         host_color: host_color.clone(),
@@ -383,7 +384,7 @@ pub async fn join_room(
     }
 
     room.guest_id = Some(body.player_id.clone());
-    room.guest_name = Some(body.player_name.clone());
+    room.guest_name = Some(sanitise_name(&body.player_name));
     room.status = RoomStatus::Ready;
     room.last_activity = now_epoch();
 
