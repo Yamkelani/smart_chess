@@ -497,7 +497,8 @@ pub async fn engine_move(
     };
 
     // Phase 2: search off the async worker, with no lock held.
-    let best = match web::block(move || search_best_move_timed(&search_board, depth, budget)).await {
+    let best = match web::block(move || search_best_move_timed(&search_board, depth, budget)).await
+    {
         Ok(b) => b,
         Err(e) => {
             log::error!("engine_move: search task failed: {}", e);
@@ -576,19 +577,18 @@ pub async fn analyze_position(body: web::Json<AnalyzeRequest>) -> impl Responder
     // Multi-PV analysis is the most expensive endpoint: it scores every legal
     // move.  Bound it and keep it off the async worker.
     let search_board = board.clone();
-    let top = match web::block(move || {
-        search_top_moves_timed(&search_board, depth, num_moves, budget)
-    })
-    .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            log::error!("analyze: search task failed: {}", e);
-            return HttpResponse::InternalServerError().json(ErrorResponse {
-                error: "Search failed".to_string(),
-            });
-        }
-    };
+    let top =
+        match web::block(move || search_top_moves_timed(&search_board, depth, num_moves, budget))
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("analyze: search task failed: {}", e);
+                return HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "Search failed".to_string(),
+                });
+            }
+        };
 
     let top_moves: Vec<AnalyzedMove> = top.into_iter().map(|(mv, score, pv)| {
         // Make the move to get the resulting position
