@@ -200,17 +200,26 @@ export class MultiplayerManager {
     return resp.json();
   }
 
-  async updateLeaderboard(rating, result) {
-    await fetch(`${getBase()}/leaderboard/update`, {
+  /**
+   * Report a game result to the leaderboard.
+   *
+   * The rating is derived server-side and is no longer sent: accepting a
+   * client-supplied rating let any caller set any rating for any player.
+   * The server may also refuse writes entirely (403) while leaderboard writes
+   * are disabled, which is the default until identity is authenticated.
+   */
+  async updateLeaderboard(result) {
+    const resp = await fetch(`${getBase()}/leaderboard/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         player_id: this.playerId,
         player_name: this.playerName,
-        rating,
         result,
       }),
     });
+    if (!resp.ok) return null;
+    return resp.json();
   }
 
   _startPolling() {
