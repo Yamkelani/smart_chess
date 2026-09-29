@@ -8,80 +8,47 @@ use std::time::Instant;
 // ═══════════════════════════════════════════════════════════════════════
 
 const PAWN_TABLE: [i32; 64] = [
-     0,  0,  0,  0,  0,  0,  0,  0,
-    50, 50, 50, 50, 50, 50, 50, 50,
-    10, 10, 20, 30, 30, 20, 10, 10,
-     5,  5, 10, 25, 25, 10,  5,  5,
-     0,  0,  0, 20, 20,  0,  0,  0,
-     5, -5,-10,  0,  0,-10, -5,  5,
-     5, 10, 10,-20,-20, 10, 10,  5,
-     0,  0,  0,  0,  0,  0,  0,  0,
+    0, 0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50, 50, 50, 50, 10, 10, 20, 30, 30, 20, 10, 10, 5, 5,
+    10, 25, 25, 10, 5, 5, 0, 0, 0, 20, 20, 0, 0, 0, 5, -5, -10, 0, 0, -10, -5, 5, 5, 10, 10, -20,
+    -20, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 const KNIGHT_TABLE: [i32; 64] = [
-    -50,-40,-30,-30,-30,-30,-40,-50,
-    -40,-20,  0,  0,  0,  0,-20,-40,
-    -30,  0, 10, 15, 15, 10,  0,-30,
-    -30,  5, 15, 20, 20, 15,  5,-30,
-    -30,  0, 15, 20, 20, 15,  0,-30,
-    -30,  5, 10, 15, 15, 10,  5,-30,
-    -40,-20,  0,  5,  5,  0,-20,-40,
-    -50,-40,-30,-30,-30,-30,-40,-50,
+    -50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10,
+    0, -30, -30, 5, 15, 20, 20, 15, 5, -30, -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10,
+    5, -30, -40, -20, 0, 5, 5, 0, -20, -40, -50, -40, -30, -30, -30, -30, -40, -50,
 ];
 
 const BISHOP_TABLE: [i32; 64] = [
-    -20,-10,-10,-10,-10,-10,-10,-20,
-    -10,  0,  0,  0,  0,  0,  0,-10,
-    -10,  0, 10, 10, 10, 10,  0,-10,
-    -10,  5,  5, 10, 10,  5,  5,-10,
-    -10,  0, 10, 10, 10, 10,  0,-10,
-    -10, 10, 10, 10, 10, 10, 10,-10,
-    -10,  5,  0,  0,  0,  0,  5,-10,
-    -20,-10,-10,-10,-10,-10,-10,-20,
+    -20, -10, -10, -10, -10, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 10, 10, 10, 10, 0,
+    -10, -10, 5, 5, 10, 10, 5, 5, -10, -10, 0, 10, 10, 10, 10, 0, -10, -10, 10, 10, 10, 10, 10, 10,
+    -10, -10, 5, 0, 0, 0, 0, 5, -10, -20, -10, -10, -10, -10, -10, -10, -20,
 ];
 
 const ROOK_TABLE: [i32; 64] = [
-     0,  0,  0,  0,  0,  0,  0,  0,
-     5, 10, 10, 10, 10, 10, 10,  5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-     0,  0,  0,  5,  5,  0,  0,  0,
+    0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 10, 10, 10, 10, 10, 5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0,
+    0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, 0, 0,
+    0, 5, 5, 0, 0, 0,
 ];
 
 const QUEEN_TABLE: [i32; 64] = [
-    -20,-10,-10, -5, -5,-10,-10,-20,
-    -10,  0,  0,  0,  0,  0,  0,-10,
-    -10,  0,  5,  5,  5,  5,  0,-10,
-     -5,  0,  5,  5,  5,  5,  0, -5,
-      0,  0,  5,  5,  5,  5,  0, -5,
-    -10,  5,  5,  5,  5,  5,  0,-10,
-    -10,  0,  5,  0,  0,  0,  0,-10,
-    -20,-10,-10, -5, -5,-10,-10,-20,
+    -20, -10, -10, -5, -5, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 5, 5, 5, 0, -10,
+    -5, 0, 5, 5, 5, 5, 0, -5, 0, 0, 5, 5, 5, 5, 0, -5, -10, 5, 5, 5, 5, 5, 0, -10, -10, 0, 5, 0, 0,
+    0, 0, -10, -20, -10, -10, -5, -5, -10, -10, -20,
 ];
 
 const KING_MIDDLEGAME_TABLE: [i32; 64] = [
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -20,-30,-30,-40,-40,-30,-30,-20,
-    -10,-20,-20,-20,-20,-20,-20,-10,
-     20, 20,  0,  0,  0,  0, 20, 20,
-     20, 30, 10,  0,  0, 10, 30, 20,
+    -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40,
+    -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -20, -30, -30, -40, -40, -30,
+    -30, -20, -10, -20, -20, -20, -20, -20, -20, -10, 20, 20, 0, 0, 0, 0, 20, 20, 20, 30, 10, 0, 0,
+    10, 30, 20,
 ];
 
 const KING_ENDGAME_TABLE: [i32; 64] = [
-    -50,-40,-30,-20,-20,-30,-40,-50,
-    -30,-20,-10,  0,  0,-10,-20,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-30,  0,  0,  0,  0,-30,-30,
-    -50,-30,-30,-30,-30,-30,-30,-50,
+    -50, -40, -30, -20, -20, -30, -40, -50, -30, -20, -10, 0, 0, -10, -20, -30, -30, -10, 20, 30,
+    30, 20, -10, -30, -30, -10, 30, 40, 40, 30, -10, -30, -30, -10, 30, 40, 40, 30, -10, -30, -30,
+    -10, 20, 30, 30, 20, -10, -30, -30, -30, 0, 0, 0, 0, -30, -30, -50, -30, -30, -30, -30, -30,
+    -30, -50,
 ];
 
 fn mirror_square(sq: u8) -> u8 {
@@ -127,7 +94,11 @@ pub fn evaluate(board: &Board) -> i32 {
                 eg_score += sign * mat;
 
                 // Positional value from piece-square tables
-                let table_sq = if ci == 0 { sq_idx } else { mirror_square(sq_idx) } as usize;
+                let table_sq = if ci == 0 {
+                    sq_idx
+                } else {
+                    mirror_square(sq_idx)
+                } as usize;
                 let mg_pst = match pi {
                     0 => KING_MIDDLEGAME_TABLE[table_sq],
                     1 => QUEEN_TABLE[table_sq],
@@ -148,8 +119,14 @@ pub fn evaluate(board: &Board) -> i32 {
     }
 
     // Bonus for bishop pair
-    if count_bits(board.bitboards[0][3]) >= 2 { mg_score += 30; eg_score += 50; }
-    if count_bits(board.bitboards[1][3]) >= 2 { mg_score -= 30; eg_score -= 50; }
+    if count_bits(board.bitboards[0][3]) >= 2 {
+        mg_score += 30;
+        eg_score += 50;
+    }
+    if count_bits(board.bitboards[1][3]) >= 2 {
+        mg_score -= 30;
+        eg_score -= 50;
+    }
 
     // Mobility bonus
     let white_mobility = count_mobility(board, Color::White);
@@ -192,8 +169,8 @@ fn compute_phase(board: &Board) -> i32 {
     for ci in 0..2 {
         phase += count_bits(board.bitboards[ci][1]) * 4; // Queens
         phase += count_bits(board.bitboards[ci][2]) * 2; // Rooks
-        phase += count_bits(board.bitboards[ci][3]) * 1; // Bishops
-        phase += count_bits(board.bitboards[ci][4]) * 1; // Knights
+        phase += count_bits(board.bitboards[ci][3]); // Bishops
+        phase += count_bits(board.bitboards[ci][4]); // Knights
     }
     // Clamp and scale: max phase = 24 → 256
     (phase.min(24) * 256) / 24
@@ -240,7 +217,11 @@ fn evaluate_pawn_structure(board: &Board, color: Color) -> (i32, i32) {
         let passed_mask = passed_pawn_mask(color, sq);
         if opp_pawns & passed_mask == 0 {
             // Bonus scales with advancement
-            let advancement = if color == Color::White { rank } else { 7 - rank };
+            let advancement = if color == Color::White {
+                rank
+            } else {
+                7 - rank
+            };
             let bonus = PASSED_PAWN_BONUS[advancement as usize];
             mg += bonus / 2;
             eg += bonus;
@@ -248,7 +229,11 @@ fn evaluate_pawn_structure(board: &Board, color: Color) -> (i32, i32) {
 
         // Backward pawn: pawn cannot advance because the stop square is attacked
         // by enemy pawns, and no friendly pawns on adjacent files can support it
-        let stop_sq = if color == Color::White { sq + 8 } else { sq.wrapping_sub(8) };
+        let stop_sq = if color == Color::White {
+            sq + 8
+        } else {
+            sq.wrapping_sub(8)
+        };
         if stop_sq < 64 {
             let adj = adjacent_files_mask(file);
             let behind_mask = behind_ranks_mask(color, rank);
@@ -270,16 +255,24 @@ fn evaluate_pawn_structure(board: &Board, color: Color) -> (i32, i32) {
 /// King safety: pawn shield + open files near king.
 fn evaluate_king_safety(board: &Board, color: Color) -> i32 {
     let ci = color_index(color);
-    let king_sq = if color == Color::White { board.white_king_sq } else { board.black_king_sq };
+    let king_sq = if color == Color::White {
+        board.white_king_sq
+    } else {
+        board.black_king_sq
+    };
     let king_file = file_of(king_sq);
     let king_rank = rank_of(king_sq);
     let own_pawns = board.bitboards[ci][5];
     let mut safety = 0i32;
 
     // Pawn shield bonus: pawns on ranks 2/3 in front of the king
-    let shield_files = if king_file == 0 { 0..=1u8 }
-        else if king_file == 7 { 6..=7u8 }
-        else { (king_file - 1)..=(king_file + 1) };
+    let shield_files = if king_file == 0 {
+        0..=1u8
+    } else if king_file == 7 {
+        6..=7u8
+    } else {
+        (king_file - 1)..=(king_file + 1)
+    };
 
     for f in shield_files {
         let file_mask = FILE_MASKS[f as usize];
@@ -296,8 +289,11 @@ fn evaluate_king_safety(board: &Board, color: Color) -> i32 {
             } else {
                 king_rank as i32 - rank_of(pawn_sq) as i32
             };
-            if dist == 1 { safety += 15; }
-            else if dist == 2 { safety += 8; }
+            if dist == 1 {
+                safety += 15;
+            } else if dist == 2 {
+                safety += 8;
+            }
         } else {
             // Open file near king — penalty
             safety -= 20;
@@ -347,8 +343,12 @@ const FILE_MASKS: [u64; 8] = [
 
 fn adjacent_files_mask(file: u8) -> u64 {
     let mut mask = 0u64;
-    if file > 0 { mask |= FILE_MASKS[(file - 1) as usize]; }
-    if file < 7 { mask |= FILE_MASKS[(file + 1) as usize]; }
+    if file > 0 {
+        mask |= FILE_MASKS[(file - 1) as usize];
+    }
+    if file < 7 {
+        mask |= FILE_MASKS[(file + 1) as usize];
+    }
     mask
 }
 
@@ -357,11 +357,19 @@ fn behind_ranks_mask(color: Color, rank: u8) -> u64 {
     match color {
         Color::White => {
             // Ranks 0..=rank
-            if rank >= 7 { u64::MAX } else { (1u64 << ((rank as u32 + 1) * 8)) - 1 }
+            if rank >= 7 {
+                u64::MAX
+            } else {
+                (1u64 << ((rank as u32 + 1) * 8)) - 1
+            }
         }
         Color::Black => {
             // Ranks rank..=7
-            if rank == 0 { u64::MAX } else { !((1u64 << (rank as u32 * 8)) - 1) }
+            if rank == 0 {
+                u64::MAX
+            } else {
+                !((1u64 << (rank as u32 * 8)) - 1)
+            }
         }
     }
 }
@@ -373,16 +381,28 @@ fn passed_pawn_mask(color: Color, sq: u8) -> u64 {
     let rank = rank_of(sq);
     let files = {
         let mut m = FILE_MASKS[file as usize];
-        if file > 0 { m |= FILE_MASKS[(file - 1) as usize]; }
-        if file < 7 { m |= FILE_MASKS[(file + 1) as usize]; }
+        if file > 0 {
+            m |= FILE_MASKS[(file - 1) as usize];
+        }
+        if file < 7 {
+            m |= FILE_MASKS[(file + 1) as usize];
+        }
         m
     };
     match color {
         Color::White => {
-            if rank >= 7 { 0 } else { files & !((1u64 << ((rank as u32 + 1) * 8)) - 1) }
+            if rank >= 7 {
+                0
+            } else {
+                files & !((1u64 << ((rank as u32 + 1) * 8)) - 1)
+            }
         }
         Color::Black => {
-            if rank == 0 { 0 } else { files & ((1u64 << (rank as u32 * 8)) - 1) }
+            if rank == 0 {
+                0
+            } else {
+                files & ((1u64 << (rank as u32 * 8)) - 1)
+            }
         }
     }
 }
@@ -394,14 +414,22 @@ fn pawn_attacks_to(sq: u8, defender_color: Color) -> u64 {
         Color::White => {
             // Enemy = black: black pawns on rank above, adjacent files
             let mut m = 0u64;
-            if file_of(sq) > 0 { m |= b << 7; }
-            if file_of(sq) < 7 { m |= b << 9; }
+            if file_of(sq) > 0 {
+                m |= b << 7;
+            }
+            if file_of(sq) < 7 {
+                m |= b << 9;
+            }
             m
         }
         Color::Black => {
             let mut m = 0u64;
-            if file_of(sq) > 0 { m |= b >> 9; }
-            if file_of(sq) < 7 { m |= b >> 7; }
+            if file_of(sq) > 0 {
+                m |= b >> 9;
+            }
+            if file_of(sq) < 7 {
+                m |= b >> 7;
+            }
             m
         }
     }
@@ -421,7 +449,10 @@ fn count_non_pawn_material(board: &Board) -> i32 {
 }
 
 fn count_mobility(board: &Board, color: Color) -> i32 {
-    let ci = match color { Color::White => 0, Color::Black => 1 };
+    let ci = match color {
+        Color::White => 0,
+        Color::Black => 1,
+    };
     let own = board.pieces_of(color);
     let mut mobility = 0i32;
 
@@ -522,12 +553,14 @@ impl SearchContext {
     /// Check if we've run out of time (checked every 2048 nodes).
     #[inline]
     fn check_time(&mut self) {
-        if self.time_limit_ms == 0 { return; }
+        if self.time_limit_ms == 0 {
+            return;
+        }
         self.nodes += 1;
-        if self.nodes & 2047 == 0 {
-            if self.start_time.elapsed().as_millis() as u64 >= self.time_limit_ms {
-                self.stopped = true;
-            }
+        if self.nodes & 2047 == 0
+            && self.start_time.elapsed().as_millis() as u64 >= self.time_limit_ms
+        {
+            self.stopped = true;
         }
     }
 }
@@ -544,11 +577,24 @@ fn tt_probe(ctx: &SearchContext, hash: u64) -> Option<TTEntry> {
     None
 }
 
-fn tt_store(ctx: &mut SearchContext, hash: u64, depth: u8, score: i32, flag: TTFlag, best_move: Option<crate::moves::Move>) {
+fn tt_store(
+    ctx: &mut SearchContext,
+    hash: u64,
+    depth: u8,
+    score: i32,
+    flag: TTFlag,
+    best_move: Option<crate::moves::Move>,
+) {
     let idx = tt_index(hash);
     // Always-replace strategy; prefer deeper entries
     if depth >= ctx.tt[idx].depth || ctx.tt[idx].hash != hash {
-        ctx.tt[idx] = TTEntry { hash, depth, score, flag, best_move };
+        ctx.tt[idx] = TTEntry {
+            hash,
+            depth,
+            score,
+            flag,
+            best_move,
+        };
     }
 }
 
@@ -573,13 +619,16 @@ fn mvv_lva_score(board: &Board, mv: &crate::moves::Move) -> i32 {
 const MAX_KILLER_DEPTH: usize = 64;
 
 fn is_killer(ctx: &SearchContext, mv: &crate::moves::Move, depth: usize) -> bool {
-    if depth >= MAX_KILLER_DEPTH { return false; }
-    ctx.killers[depth][0].map_or(false, |k| k == *mv) ||
-    ctx.killers[depth][1].map_or(false, |k| k == *mv)
+    if depth >= MAX_KILLER_DEPTH {
+        return false;
+    }
+    (ctx.killers[depth][0] == Some(*mv)) || (ctx.killers[depth][1] == Some(*mv))
 }
 
 fn store_killer(ctx: &mut SearchContext, mv: &crate::moves::Move, depth: usize) {
-    if depth >= MAX_KILLER_DEPTH { return; }
+    if depth >= MAX_KILLER_DEPTH {
+        return;
+    }
     if ctx.killers[depth][0] != Some(*mv) {
         ctx.killers[depth][1] = ctx.killers[depth][0];
         ctx.killers[depth][0] = Some(*mv);
@@ -592,7 +641,7 @@ fn store_killer(ctx: &mut SearchContext, mv: &crate::moves::Move, depth: usize) 
 ///   3. Killer moves (80_000)
 ///   4. Quiet moves (0)
 fn order_moves(
-    moves: &mut Vec<crate::moves::Move>,
+    moves: &mut [crate::moves::Move],
     board: &Board,
     tt_move: Option<crate::moves::Move>,
     depth: usize,
@@ -602,7 +651,7 @@ fn order_moves(
         let mut priority = 0i32;
 
         // TT move gets highest priority
-        if tt_move.map_or(false, |tm| tm == *mv) {
+        if tt_move == Some(*mv) {
             return -900_000;
         }
 
@@ -618,7 +667,6 @@ fn order_moves(
     });
 }
 
-
 // ═══════════════════════════════════════════════════════════════════════
 // Principal Search: Iterative Deepening + Alpha-Beta + TT + Ordering
 // ═══════════════════════════════════════════════════════════════════════
@@ -630,7 +678,11 @@ pub fn search_best_move(board: &Board, depth: u8) -> Option<(crate::moves::Move,
 }
 
 /// Same as `search_best_move` but with an explicit time budget.
-pub fn search_best_move_timed(board: &Board, depth: u8, time_limit_ms: u64) -> Option<(crate::moves::Move, i32)> {
+pub fn search_best_move_timed(
+    board: &Board,
+    depth: u8,
+    time_limit_ms: u64,
+) -> Option<(crate::moves::Move, i32)> {
     use crate::moves::{generate_legal_moves, make_move};
 
     let moves = generate_legal_moves(board);
@@ -659,8 +711,17 @@ pub fn search_best_move_timed(board: &Board, depth: u8, time_limit_ms: u64) -> O
         for mv in &ordered {
             let mut new_board = board.clone();
             if make_move(&mut new_board, mv) {
-                let score = -alpha_beta(&new_board, d - 1, -i32::MAX + 1, -current_score.max(i32::MIN + 1), &mut ctx);
-                if ctx.stopped { aborted = true; break; }
+                let score = -alpha_beta(
+                    &new_board,
+                    d - 1,
+                    -i32::MAX + 1,
+                    -current_score.max(i32::MIN + 1),
+                    &mut ctx,
+                );
+                if ctx.stopped {
+                    aborted = true;
+                    break;
+                }
                 if score > current_score {
                     current_score = score;
                     current_best = *mv;
@@ -668,16 +729,27 @@ pub fn search_best_move_timed(board: &Board, depth: u8, time_limit_ms: u64) -> O
             }
         }
 
-        if aborted { break; } // Keep last complete iteration result
+        if aborted {
+            break;
+        } // Keep last complete iteration result
 
         best_move = current_best;
         best_score = current_score;
 
         // Store root position in TT
-        tt_store(&mut ctx, hash, d, best_score, TTFlag::Exact, Some(best_move));
+        tt_store(
+            &mut ctx,
+            hash,
+            d,
+            best_score,
+            TTFlag::Exact,
+            Some(best_move),
+        );
 
         // If we found a mate, stop early
-        if best_score.abs() > 18000 { break; }
+        if best_score.abs() > 18000 {
+            break;
+        }
     }
 
     Some((best_move, best_score))
@@ -832,11 +904,10 @@ pub fn search_top_moves_timed(
     }
 
     // Sort descending by score
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|s| std::cmp::Reverse(s.1));
     scored.truncate(num_moves);
     scored
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Alpha-Beta with Null-Move Pruning and Late-Move Reductions
@@ -847,7 +918,9 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
 
     // ── Time check ──
     ctx.check_time();
-    if ctx.stopped { return 0; }
+    if ctx.stopped {
+        return 0;
+    }
 
     // ── Transposition table probe ──
     let hash = hash_board(board);
@@ -856,10 +929,14 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
             match entry.flag {
                 TTFlag::Exact => return entry.score,
                 TTFlag::LowerBound => {
-                    if entry.score >= beta { return entry.score; }
+                    if entry.score >= beta {
+                        return entry.score;
+                    }
                 }
                 TTFlag::UpperBound => {
-                    if entry.score <= alpha { return entry.score; }
+                    if entry.score <= alpha {
+                        return entry.score;
+                    }
                 }
             }
         }
@@ -881,7 +958,9 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
             null_board.en_passant_square = None;
             let r = if depth > 6 { 3 } else { 2 };
             let null_score = -alpha_beta(&null_board, depth - 1 - r, -beta, -beta + 1, ctx);
-            if ctx.stopped { return 0; }
+            if ctx.stopped {
+                return 0;
+            }
             if null_score >= beta {
                 return beta;
             }
@@ -924,7 +1003,9 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
             && mv.promotion.is_none()
         {
             let reduced = -alpha_beta(&new_board, depth - 2, -alpha - 1, -alpha, ctx);
-            if ctx.stopped { return 0; }
+            if ctx.stopped {
+                return 0;
+            }
             if reduced > alpha {
                 score = -alpha_beta(&new_board, depth - 1, -beta, -alpha, ctx);
             } else {
@@ -934,7 +1015,9 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
             score = -alpha_beta(&new_board, depth - 1, -beta, -alpha, ctx);
         }
 
-        if ctx.stopped { return 0; }
+        if ctx.stopped {
+            return 0;
+        }
         moves_searched += 1;
 
         if score > best_score {
@@ -948,7 +1031,14 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
             if !is_capture {
                 store_killer(ctx, mv, depth as usize);
             }
-            tt_store(ctx, hash, depth, best_score, TTFlag::LowerBound, Some(best_move));
+            tt_store(
+                ctx,
+                hash,
+                depth,
+                best_score,
+                TTFlag::LowerBound,
+                Some(best_move),
+            );
             return beta;
         }
     }
@@ -964,11 +1054,19 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
 }
 
 /// Quiescence search to avoid horizon effect — only searches captures.
-fn quiescence_search(board: &Board, mut alpha: i32, beta: i32, max_depth: u8, ctx: &mut SearchContext) -> i32 {
+fn quiescence_search(
+    board: &Board,
+    mut alpha: i32,
+    beta: i32,
+    max_depth: u8,
+    ctx: &mut SearchContext,
+) -> i32 {
     use crate::moves::{generate_legal_moves, make_move};
 
     ctx.check_time();
-    if ctx.stopped { return 0; }
+    if ctx.stopped {
+        return 0;
+    }
 
     let stand_pat = evaluate(board);
     if stand_pat >= beta {
@@ -991,7 +1089,9 @@ fn quiescence_search(board: &Board, mut alpha: i32, beta: i32, max_depth: u8, ct
         let mut new_board = board.clone();
         if make_move(&mut new_board, mv) {
             let score = -quiescence_search(&new_board, -beta, -alpha, max_depth - 1, ctx);
-            if ctx.stopped { return 0; }
+            if ctx.stopped {
+                return 0;
+            }
             if score >= beta {
                 return beta;
             }
