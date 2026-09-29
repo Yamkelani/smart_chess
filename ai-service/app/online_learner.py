@@ -532,7 +532,7 @@ class OnlineLearner:
         }
 
     def _buffer_path(self) -> str:
-        return os.path.join(TRAINING_DATA_DIR, "online_replay_buffer.pkl")
+        return os.path.join(TRAINING_DATA_DIR, "online_replay_buffer.npz")
 
     def _save_buffer(self):
         """Persist replay buffer to disk."""

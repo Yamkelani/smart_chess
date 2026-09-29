@@ -7,7 +7,6 @@ guided by the current neural network. The resulting game data
 """
 
 import os
-import pickle
 import time
 from dataclasses import dataclass, field
 
@@ -186,23 +185,35 @@ class ReplayBuffer:
         return len(self.buffer)
 
     def save(self, path: str):
-        """Save buffer to disk."""
+        """Save buffer to disk as plain arrays (.npz), never as pickle."""
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+        # Passing a file object stops numpy appending its own ".npz" suffix.
         with open(path, 'wb') as f:
-            pickle.dump({
-                'buffer': self.buffer,
-                'max_size': self.max_size
-            }, f)
+            np.savez(
+                f,
+                boards=np.stack([ex.board_tensor for ex in self.buffer]) if self.buffer else np.zeros(0),
+                policies=np.stack([ex.policy_target for ex in self.buffer]) if self.buffer else np.zeros(0),
+                values=np.array([ex.value_target for ex in self.buffer], dtype=np.float64),
+                max_size=np.array(self.max_size),
+            )
         print(f"Saved replay buffer ({len(self.buffer)} examples) to {path}")
 
     def load(self, path: str) -> bool:
         """Load buffer from disk."""
         if os.path.exists(path):
             try:
-                with open(path, 'rb') as f:
-                    data = pickle.load(f)  # nosec: trusted local training data only
-                self.buffer = data['buffer']
-                self.max_size = data.get('max_size', self.max_size)
+                # allow_pickle=False: the file can only hold numeric arrays, so a
+                # tampered buffer cannot execute code on load.
+                with np.load(path, allow_pickle=False) as data:
+                    boards, policies, values = data['boards'], data['policies'], data['values']
+                    max_size = int(data['max_size'])
+                if not len(boards) == len(policies) == len(values):
+                    raise ValueError("replay buffer arrays have mismatched lengths")
+                self.buffer = [
+                    TrainingExample(board_tensor=b, policy_target=p, value_target=float(v))
+                    for b, p, v in zip(boards, policies, values, strict=True)
+                ]
+                self.max_size = max_size
                 print(f"Loaded replay buffer ({len(self.buffer)} examples) from {path}")
                 return True
             except Exception as e:  # noqa: BLE001 - any unreadable buffer means start empty
