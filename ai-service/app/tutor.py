@@ -8,9 +8,9 @@ Provides:
 4. Pattern matching for contextual coaching
 """
 
-import chess
 import re
-from typing import Optional, List, Dict
+
+import chess
 
 # ═══════════════════════════════════════════════════
 # CHESS KNOWLEDGE BASE
@@ -373,7 +373,7 @@ QA_PATTERNS = [
 ]
 
 
-def get_lessons() -> Dict:
+def get_lessons() -> dict:
     """Return the full lesson library for the Learn tab."""
     result = {}
     for cat_id, cat in LESSONS.items():
@@ -388,9 +388,9 @@ def get_lessons() -> Dict:
     return result
 
 
-def get_lesson_detail(lesson_id: str) -> Optional[Dict]:
+def get_lesson_detail(lesson_id: str) -> dict | None:
     """Return the full content of a specific lesson."""
-    for cat_id, cat in LESSONS.items():
+    for cat in LESSONS.values():
         for item in cat["items"]:
             if item["id"] == lesson_id:
                 return {
@@ -402,7 +402,7 @@ def get_lesson_detail(lesson_id: str) -> Optional[Dict]:
     return None
 
 
-def analyze_position(fen: str) -> Dict:
+def analyze_position(fen: str) -> dict:
     """Analyze a position and return structured coaching feedback."""
     try:
         board = chess.Board(fen)
@@ -521,7 +521,7 @@ def analyze_position(fen: str) -> Dict:
             "material": {"white": white_mat, "black": black_mat}}
 
 
-def answer_question(question: str, fen: Optional[str] = None) -> str:
+def answer_question(question: str, fen: str | None = None) -> str:
     """
     Answer a chess question using pattern matching and position analysis.
     Returns a formatted string response.

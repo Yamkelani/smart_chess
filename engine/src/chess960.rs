@@ -1,5 +1,4 @@
-use crate::board::*;
-use crate::piece::{Color, Piece, PieceType};
+use crate::piece::{Color, PieceType};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -12,9 +11,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chess960Position {
-    pub position_id: u16,  // 0-959
+    pub position_id: u16, // 0-959
     pub fen: String,
-    pub piece_order: [PieceType; 8],  // White back rank order (files a-h)
+    pub piece_order: [PieceType; 8], // White back rank order (files a-h)
 }
 
 /// All 960 valid back-rank configurations can be indexed 0–959.
@@ -83,9 +82,15 @@ fn id_to_back_rank(id: u16) -> [PieceType; 8] {
 
 /// The 10 ways to choose 2 out of 5 remaining positions for knights
 const KNIGHT_PLACEMENTS: [(usize, usize); 10] = [
-    (0, 1), (0, 2), (0, 3), (0, 4),
-    (1, 2), (1, 3), (1, 4),
-    (2, 3), (2, 4),
+    (0, 1),
+    (0, 2),
+    (0, 3),
+    (0, 4),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (2, 3),
+    (2, 4),
     (3, 4),
 ];
 
@@ -192,10 +197,19 @@ mod tests {
     #[test]
     fn test_standard_position() {
         let pos = generate_position(518);
-        assert_eq!(pos.piece_order, [
-            PieceType::Rook, PieceType::Knight, PieceType::Bishop, PieceType::Queen,
-            PieceType::King, PieceType::Bishop, PieceType::Knight, PieceType::Rook,
-        ]);
+        assert_eq!(
+            pos.piece_order,
+            [
+                PieceType::Rook,
+                PieceType::Knight,
+                PieceType::Bishop,
+                PieceType::Queen,
+                PieceType::King,
+                PieceType::Bishop,
+                PieceType::Knight,
+                PieceType::Rook,
+            ]
+        );
     }
 
     #[test]
@@ -214,11 +228,24 @@ mod tests {
                     _ => {}
                 }
             }
-            assert_eq!(bishop_files.len(), 2, "Position {} doesn't have 2 bishops", id);
-            assert_ne!(bishop_files[0] % 2, bishop_files[1] % 2, "Position {} bishops on same color", id);
+            assert_eq!(
+                bishop_files.len(),
+                2,
+                "Position {} doesn't have 2 bishops",
+                id
+            );
+            assert_ne!(
+                bishop_files[0] % 2,
+                bishop_files[1] % 2,
+                "Position {} bishops on same color",
+                id
+            );
             assert_eq!(rook_files.len(), 2, "Position {} doesn't have 2 rooks", id);
-            assert!(rook_files[0] < king_file && king_file < rook_files[1],
-                "Position {} king not between rooks", id);
+            assert!(
+                rook_files[0] < king_file && king_file < rook_files[1],
+                "Position {} king not between rooks",
+                id
+            );
         }
     }
 

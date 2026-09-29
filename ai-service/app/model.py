@@ -11,14 +11,20 @@ The network learns from self-play data, continuously improving
 through reinforcement learning.
 """
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import os
+
+import torch
+import torch.nn.functional as F
+from torch import nn
+
 from app.config import (
-    NN_INPUT_CHANNELS, NN_BOARD_SIZE, NN_RESIDUAL_BLOCKS,
-    NN_FILTERS, NN_POLICY_OUTPUT, NN_VALUE_HIDDEN,
-    MODEL_DIR, MODEL_FILENAME
+    MODEL_DIR,
+    MODEL_FILENAME,
+    NN_FILTERS,
+    NN_INPUT_CHANNELS,
+    NN_POLICY_OUTPUT,
+    NN_RESIDUAL_BLOCKS,
+    NN_VALUE_HIDDEN,
 )
 
 
@@ -154,7 +160,7 @@ class ChessNetManager:
                 self.generation = checkpoint.get('generation', 0)
                 print(f"✓ Loaded model (generation {self.generation}) from {self.model_path}")
                 return True
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - any unreadable checkpoint means start fresh
                 print(f"⚠ Failed to load model: {e}. Starting fresh.")
                 return False
         else:

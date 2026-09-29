@@ -3,18 +3,7 @@ use actix_web::{web, App, HttpServer};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-mod board;
-mod piece;
-mod moves;
-mod evaluation;
-mod game;
-mod api;
-mod persistence;
-pub mod attacks;
-mod chess960;
-mod variants;
-mod multiplayer;
-mod zobrist;
+use chess_engine::{api, multiplayer, persistence};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -41,7 +30,9 @@ async fn main() -> std::io::Result<()> {
     // Allowed CORS origins — set ALLOWED_ORIGINS env var as a comma-separated list.
     // Defaults to localhost dev origins only.
     let allowed_origins: Vec<String> = std::env::var("ALLOWED_ORIGINS")
-        .unwrap_or_else(|_| "http://localhost:5173,http://localhost:1420,http://127.0.0.1:5173".to_string())
+        .unwrap_or_else(|_| {
+            "http://localhost:5173,http://localhost:1420,http://127.0.0.1:5173".to_string()
+        })
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
