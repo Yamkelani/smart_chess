@@ -263,7 +263,11 @@ fn resolve_host_color(requested: Option<&str>) -> String {
         "black" => "black".to_string(),
         "random" => {
             use rand::Rng;
-            if rand::thread_rng().gen_bool(0.5) { "white".to_string() } else { "black".to_string() }
+            if rand::thread_rng().gen_bool(0.5) {
+                "white".to_string()
+            } else {
+                "black".to_string()
+            }
         }
         _ => "white".to_string(),
     }
@@ -513,9 +517,11 @@ pub async fn room_move(
     // Real enforcement requires authenticated identity.
     let player_color = match room.color_of(&body.player_id) {
         Some(c) => c,
-        None => return HttpResponse::Forbidden().json(serde_json::json!({
-            "error": "You are not a player in this room"
-        })),
+        None => {
+            return HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "You are not a player in this room"
+            }))
+        }
     };
 
     let mut games = game_state.games.lock().unwrap();
