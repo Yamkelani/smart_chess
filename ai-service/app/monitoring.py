@@ -160,7 +160,7 @@ class ModelMonitor:
         self.elo_history: list[dict] = []
 
         self._load()
-        print(f"[Monitor] initialized — {len(self.loss_history)} loss entries, "
+        print(f"[Monitor] initialized - {len(self.loss_history)} loss entries, "
               f"{len(self.game_outcomes)} game outcomes, ELO: {self.elo_rating:.0f}")
 
     # ---- Recording ----
@@ -485,7 +485,7 @@ class ModelMonitor:
         }
         self.alerts.append(alert)
         self._save_alerts()
-        print(f"[Monitor] ⚠ ALERT ({alert_type}): {message}")
+        print(f"[Monitor] ALERT ({alert_type}): {message}")
 
     def acknowledge_alert(self, index: int):
         """Mark an alert as acknowledged."""

@@ -461,6 +461,20 @@ class TestModel:
         assert not marker.exists(), "loading a checkpoint must not execute embedded code"
         assert manager.generation == 0  # fell back to fresh weights
 
+    def test_starts_on_a_cp1252_console(self, tmp_path, monkeypatch):
+        # A Windows console defaults to cp1252; startup must not crash on it.
+        import io
+        import sys
+
+        import app.model as model_module
+
+        console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        monkeypatch.setattr(sys, "stdout", console)
+        monkeypatch.setattr(model_module, "MODEL_DIR", str(tmp_path))
+        manager = model_module.ChessNetManager(device="cpu")  # no model yet
+        manager.save_model()
+        model_module.ChessNetManager(device="cpu")  # loads the saved model
+
 
 @pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not installed")
 class TestReplayBuffer:
@@ -597,3 +611,26 @@ class TestChessEnv:
         # Most planes should be mostly zeros (only 2 pieces)
         non_zero = np.count_nonzero(tensor[:12])  # piece planes
         assert non_zero <= 4, f"Near-empty board should have few non-zero entries, got {non_zero}"
+
+
+# ---------------------------------------------------------------------------
+# Console output must be ASCII: a Windows console (cp1252) cannot encode
+# symbols such as ✓ or —, and print() then raises and crashes the service.
+# ---------------------------------------------------------------------------
+class TestConsoleOutput:
+    def test_print_calls_are_ascii(self):
+        import ast
+        import pathlib
+
+        app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
+        offenders = []
+        for path in sorted(app_dir.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print":
+                    for const in ast.walk(node):
+                        if (isinstance(const, ast.Constant) and isinstance(const.value, str)
+                                and not const.value.isascii()):
+                            offenders.append(f"{path.name}:{node.lineno}")
+                            break
+        assert not offenders, f"non-ASCII text in print(): {offenders}"

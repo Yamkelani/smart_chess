@@ -97,7 +97,7 @@ class OnlineLearner:
         # Lock for thread safety
         self._lock = threading.Lock()
 
-        print(f"[OnlineLearner] initialized — buffer: {len(self.replay_buffer)} positions, "
+        print(f"[OnlineLearner] initialized - buffer: {len(self.replay_buffer)} positions, "
               f"device: {self.device}")
 
     # ---- Session management ----
@@ -487,7 +487,7 @@ class OnlineLearner:
 
         num_positions = len(examples)
         print(f"[OnlineLearner] game complete: {result} (winner={winner}), "
-              f"{num_positions} positions → buffer ({len(self.replay_buffer)} total)")
+              f"{num_positions} positions -> buffer ({len(self.replay_buffer)} total)")
 
         loss_info = self._quick_train()
         self.games_learned += 1

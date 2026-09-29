@@ -147,7 +147,7 @@ class Trainer:
             metrics = self.train_epoch(dataloader)
             self.scheduler.step(metrics['total_loss'])
 
-            print(f"  Epoch {epoch+1}/{epochs} — "
+            print(f"  Epoch {epoch+1}/{epochs} - "
                   f"Policy: {metrics['policy_loss']:.4f}, "
                   f"Value: {metrics['value_loss']:.4f}, "
                   f"Total: {metrics['total_loss']:.4f}")
