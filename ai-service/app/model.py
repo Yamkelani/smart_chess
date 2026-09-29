@@ -155,7 +155,10 @@ class ChessNetManager:
         """Load model weights from disk if available."""
         if os.path.exists(self.model_path):
             try:
-                checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=False)
+                # weights_only: the checkpoint is tensors plus an int, so it
+                # never needs full unpickling, which would run any code
+                # embedded in a tampered file.
+                checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=True)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 self.generation = checkpoint.get('generation', 0)
                 print(f"✓ Loaded model (generation {self.generation}) from {self.model_path}")
