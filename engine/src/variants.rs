@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Supported chess game variants
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GameVariant {
     /// Standard chess
+    #[default]
     Standard,
     /// Chess960 (Fischer Random Chess) — randomized starting positions
     Chess960,
@@ -15,12 +16,6 @@ pub enum GameVariant {
     Atomic,
     /// Crazyhouse — captured pieces can be dropped back on the board
     Crazyhouse,
-}
-
-impl Default for GameVariant {
-    fn default() -> Self {
-        GameVariant::Standard
-    }
 }
 
 impl GameVariant {
@@ -46,6 +41,8 @@ impl GameVariant {
         }
     }
 
+    // Public API shared with the Tauri build; kept as-is rather than moved to `FromStr`.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<GameVariant> {
         match s.to_lowercase().as_str() {
             "standard" => Some(GameVariant::Standard),

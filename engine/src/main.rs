@@ -3,18 +3,7 @@ use actix_web::{web, App, HttpServer};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-mod api;
-pub mod attacks;
-mod board;
-mod chess960;
-mod evaluation;
-mod game;
-mod moves;
-mod multiplayer;
-mod persistence;
-mod piece;
-mod variants;
-mod zobrist;
+use chess_engine::{api, multiplayer, persistence};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

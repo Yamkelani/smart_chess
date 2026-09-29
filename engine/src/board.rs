@@ -108,18 +108,6 @@ pub fn piece_type_index(pt: PieceType) -> usize {
     }
 }
 
-fn piece_type_from_index(idx: usize) -> PieceType {
-    match idx {
-        0 => PieceType::King,
-        1 => PieceType::Queen,
-        2 => PieceType::Rook,
-        3 => PieceType::Bishop,
-        4 => PieceType::Knight,
-        5 => PieceType::Pawn,
-        _ => unreachable!(),
-    }
-}
-
 pub fn color_index(c: Color) -> usize {
     match c {
         Color::White => 0,
@@ -130,6 +118,12 @@ pub fn color_index(c: Color) -> usize {
 /// Default value for the mailbox field during deserialization (serde skip default).
 fn empty_mailbox() -> [Option<Piece>; 64] {
     [None; 64]
+}
+
+impl Default for Board {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Board {
@@ -562,7 +556,7 @@ pub fn knight_attacks(square: u8) -> u64 {
     for (dr, df) in offsets {
         let r = rank + dr;
         let f = file + df;
-        if r >= 0 && r < 8 && f >= 0 && f < 8 {
+        if (0..8).contains(&r) && (0..8).contains(&f) {
             attacks |= bit(sq(r as u8, f as u8));
         }
     }
@@ -582,7 +576,7 @@ pub fn king_attacks(square: u8) -> u64 {
             }
             let r = rank + dr;
             let f = file + df;
-            if r >= 0 && r < 8 && f >= 0 && f < 8 {
+            if (0..8).contains(&r) && (0..8).contains(&f) {
                 attacks |= bit(sq(r as u8, f as u8));
             }
         }
@@ -602,7 +596,7 @@ pub fn rook_attacks(square: u8, occupied: u64) -> u64 {
     for (dr, df) in directions {
         let mut r = rank + dr;
         let mut f = file + df;
-        while r >= 0 && r < 8 && f >= 0 && f < 8 {
+        while (0..8).contains(&r) && (0..8).contains(&f) {
             let sq_bit = bit(sq(r as u8, f as u8));
             attacks |= sq_bit;
             if occupied & sq_bit != 0 {
@@ -626,7 +620,7 @@ pub fn bishop_attacks(square: u8, occupied: u64) -> u64 {
     for (dr, df) in directions {
         let mut r = rank + dr;
         let mut f = file + df;
-        while r >= 0 && r < 8 && f >= 0 && f < 8 {
+        while (0..8).contains(&r) && (0..8).contains(&f) {
             let sq_bit = bit(sq(r as u8, f as u8));
             attacks |= sq_bit;
             if occupied & sq_bit != 0 {

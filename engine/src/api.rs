@@ -270,10 +270,10 @@ pub async fn new_game(
     if let Err(e) = persistence::save_game(&game) {
         log::warn!("Could not persist new game {}: {}", game.id, e);
     }
-    data.games.lock().map_err(|_| ()).ok().map(|mut g| {
+    if let Ok(mut g) = data.games.lock() {
         evict_old_games(&mut g);
         g.insert(game_id, game);
-    });
+    }
 
     HttpResponse::Ok().json(response)
 }
@@ -440,7 +440,7 @@ pub async fn engine_move(
         Some(game) => {
             let depth = query.depth.unwrap_or(4).min(12);
             match search_best_move(&game.board, depth) {
-                Some((best_move, score)) => {
+                Some((best_move, _score)) => {
                     let uci = best_move.to_uci();
                     match game.make_move(&uci) {
                         Ok(result) => {
@@ -617,10 +617,10 @@ pub async fn new_variant_game(
     if let Err(e) = persistence::save_game(&game) {
         log::warn!("Could not persist variant game {}: {}", game.id, e);
     }
-    data.games.lock().map_err(|_| ()).ok().map(|mut g| {
+    if let Ok(mut g) = data.games.lock() {
         evict_old_games(&mut g);
         g.insert(game_id, game);
-    });
+    }
 
     HttpResponse::Ok().json(response)
 }

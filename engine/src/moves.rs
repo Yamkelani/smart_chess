@@ -148,7 +148,7 @@ fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     moves
 }
 
-fn generate_pawn_moves(board: &Board, side: Color, own: u64, enemy: u64, moves: &mut Vec<Move>) {
+fn generate_pawn_moves(board: &Board, side: Color, _own: u64, enemy: u64, moves: &mut Vec<Move>) {
     let ci = match side {
         Color::White => 0,
         Color::Black => 1,
@@ -197,7 +197,7 @@ fn generate_pawn_moves(board: &Board, side: Color, own: u64, enemy: u64, moves: 
         // Captures
         for df in [-1i8, 1] {
             let f = file as i8 + df;
-            if f < 0 || f >= 8 {
+            if !(0..8).contains(&f) {
                 continue;
             }
             let target = sq(target_rank, f as u8);
@@ -356,7 +356,7 @@ fn generate_castling_moves(board: &Board, side: Color, moves: &mut Vec<Move>) {
 pub fn make_move(board: &mut Board, mv: &Move) -> bool {
     let side = board.side_to_move;
     let enemy = side.opposite();
-    let ci = match side {
+    let _ci = match side {
         Color::White => 0,
         Color::Black => 1,
     };

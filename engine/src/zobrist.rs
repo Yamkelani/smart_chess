@@ -32,22 +32,18 @@ impl ZobristKeys {
         };
 
         let mut pieces = [[[0u64; 64]; 6]; 2];
-        for c in 0..2 {
-            for p in 0..6 {
-                for sq in 0..64 {
-                    pieces[c][p][sq] = next();
-                }
-            }
+        for key in pieces.iter_mut().flatten().flatten() {
+            *key = next();
         }
 
         let mut castling = [0u64; 16];
-        for i in 0..16 {
-            castling[i] = next();
+        for key in castling.iter_mut() {
+            *key = next();
         }
 
         let mut en_passant = [0u64; 9];
-        for i in 0..9 {
-            en_passant[i] = next();
+        for key in en_passant.iter_mut() {
+            *key = next();
         }
 
         let side = next();

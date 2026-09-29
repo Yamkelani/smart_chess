@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::game::{GameState, GameStatus};
-use crate::variants::{GameVariant, VariantState};
 
 // ── Multiplayer Room System ──
 // Since we're using a REST architecture (no WebSocket dependency needed),
@@ -77,6 +76,12 @@ pub struct MultiplayerState {
     pub rooms: Mutex<HashMap<String, MultiplayerRoom>>,
     pub player_rooms: Mutex<HashMap<String, String>>, // player_id -> room_id
     pub leaderboard: Mutex<Vec<LeaderboardEntry>>,
+}
+
+impl Default for MultiplayerState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MultiplayerState {
@@ -205,7 +210,7 @@ fn generate_room_code() -> String {
 
 pub async fn create_room(
     mp_state: web::Data<MultiplayerState>,
-    game_state: web::Data<crate::api::AppState>,
+    _game_state: web::Data<crate::api::AppState>,
     body: web::Json<CreateRoomRequest>,
 ) -> impl Responder {
     let room_id = Uuid::new_v4().to_string();
@@ -377,7 +382,7 @@ pub async fn room_poll(
 
     let games = game_state.games.lock().unwrap();
 
-    let last_move_count = body.last_move_count.unwrap_or(0);
+    let _last_move_count = body.last_move_count.unwrap_or(0);
     let last_chat_count = body.last_chat_count.unwrap_or(0);
 
     let (fen, pieces, legal_moves, side_to_move, is_check, game_status, move_history) =
@@ -642,7 +647,7 @@ pub async fn list_rooms(mp_state: web::Data<MultiplayerState>) -> impl Responder
 pub async fn get_leaderboard(mp_state: web::Data<MultiplayerState>) -> impl Responder {
     let lb = mp_state.leaderboard.lock().unwrap();
     let mut sorted = lb.clone();
-    sorted.sort_by(|a, b| b.rating.cmp(&a.rating));
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.rating));
     sorted.truncate(100);
     HttpResponse::Ok().json(sorted)
 }

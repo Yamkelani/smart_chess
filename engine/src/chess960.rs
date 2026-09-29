@@ -1,5 +1,4 @@
-use crate::board::*;
-use crate::piece::{Color, Piece, PieceType};
+use crate::piece::{Color, PieceType};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 

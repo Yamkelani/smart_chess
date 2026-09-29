@@ -169,8 +169,8 @@ fn compute_phase(board: &Board) -> i32 {
     for ci in 0..2 {
         phase += count_bits(board.bitboards[ci][1]) * 4; // Queens
         phase += count_bits(board.bitboards[ci][2]) * 2; // Rooks
-        phase += count_bits(board.bitboards[ci][3]) * 1; // Bishops
-        phase += count_bits(board.bitboards[ci][4]) * 1; // Knights
+        phase += count_bits(board.bitboards[ci][3]); // Bishops
+        phase += count_bits(board.bitboards[ci][4]); // Knights
     }
     // Clamp and scale: max phase = 24 → 256
     (phase.min(24) * 256) / 24
@@ -557,10 +557,10 @@ impl SearchContext {
             return;
         }
         self.nodes += 1;
-        if self.nodes & 2047 == 0 {
-            if self.start_time.elapsed().as_millis() as u64 >= self.time_limit_ms {
-                self.stopped = true;
-            }
+        if self.nodes & 2047 == 0
+            && self.start_time.elapsed().as_millis() as u64 >= self.time_limit_ms
+        {
+            self.stopped = true;
         }
     }
 }
@@ -622,8 +622,7 @@ fn is_killer(ctx: &SearchContext, mv: &crate::moves::Move, depth: usize) -> bool
     if depth >= MAX_KILLER_DEPTH {
         return false;
     }
-    ctx.killers[depth][0].map_or(false, |k| k == *mv)
-        || ctx.killers[depth][1].map_or(false, |k| k == *mv)
+    (ctx.killers[depth][0] == Some(*mv)) || (ctx.killers[depth][1] == Some(*mv))
 }
 
 fn store_killer(ctx: &mut SearchContext, mv: &crate::moves::Move, depth: usize) {
@@ -642,7 +641,7 @@ fn store_killer(ctx: &mut SearchContext, mv: &crate::moves::Move, depth: usize) 
 ///   3. Killer moves (80_000)
 ///   4. Quiet moves (0)
 fn order_moves(
-    moves: &mut Vec<crate::moves::Move>,
+    moves: &mut [crate::moves::Move],
     board: &Board,
     tt_move: Option<crate::moves::Move>,
     depth: usize,
@@ -652,7 +651,7 @@ fn order_moves(
         let mut priority = 0i32;
 
         // TT move gets highest priority
-        if tt_move.map_or(false, |tm| tm == *mv) {
+        if tt_move == Some(*mv) {
             return -900_000;
         }
 
@@ -843,7 +842,7 @@ pub fn search_top_moves(
     }
 
     // Sort descending by score
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|s| std::cmp::Reverse(s.1));
     scored.truncate(num_moves);
     scored
 }
