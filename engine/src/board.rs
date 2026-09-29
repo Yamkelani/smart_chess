@@ -362,30 +362,41 @@ impl Board {
 
         let mut board = Board::empty();
 
-        // Parse piece placement
-        let mut rank = 7u8;
-        let mut file = 0u8;
-        for ch in parts[0].chars() {
-            match ch {
-                '/' => {
-                    if rank == 0 {
-                        return Err("Invalid FEN: too many ranks".to_string());
-                    }
-                    rank -= 1;
-                    file = 0;
+        // Parse piece placement: exactly 8 ranks of exactly 8 squares each.
+        let ranks: Vec<&str> = parts[0].split('/').collect();
+        if ranks.len() != 8 {
+            return Err(format!(
+                "Invalid FEN: expected 8 ranks, got {}",
+                ranks.len()
+            ));
+        }
+        for (i, rank_str) in ranks.iter().enumerate() {
+            let rank = 7 - i as u8;
+            let mut file = 0u8;
+            for ch in rank_str.chars() {
+                let (width, piece) = match ch {
+                    '1'..='8' => ((ch as u8) - b'0', None),
+                    _ => match PieceType::from_char(ch) {
+                        Some((pt, color)) => (1, Some(Piece::new(pt, color))),
+                        None => return Err(format!("Invalid FEN: unknown piece '{}'", ch)),
+                    },
+                };
+                if file + width > 8 {
+                    return Err(format!(
+                        "Invalid FEN: rank {} has more than 8 squares",
+                        rank + 1
+                    ));
                 }
-                '1'..='8' => {
-                    file += (ch as u8) - b'0';
+                if let Some(p) = piece {
+                    board.set_piece(sq(rank, file), p);
                 }
-                _ => {
-                    if let Some((pt, color)) = PieceType::from_char(ch) {
-                        let square = sq(rank, file);
-                        board.set_piece(square, Piece::new(pt, color));
-                        file += 1;
-                    } else {
-                        return Err(format!("Invalid FEN: unknown piece '{}'", ch));
-                    }
-                }
+                file += width;
+            }
+            if file != 8 {
+                return Err(format!(
+                    "Invalid FEN: rank {} has fewer than 8 squares",
+                    rank + 1
+                ));
             }
         }
 
@@ -396,31 +407,108 @@ impl Board {
             _ => return Err("Invalid FEN: bad side to move".to_string()),
         };
 
-        // Parse castling rights
+        // Parse castling rights. Shredder-style file letters (Chess960) are
+        // accepted but not interpreted.
         let castling = parts[2];
+        if castling != "-"
+            && !castling.chars().all(|c| {
+                "KQkq".contains(c) || c.is_ascii_alphabetic() && c.to_ascii_lowercase() <= 'h'
+            })
+        {
+            return Err(format!("Invalid FEN: bad castling field '{}'", castling));
+        }
+        // Keep a right only if the king and rook are on their home squares;
+        // castling moves are generated from these flags alone.
+        let has = |b: &Board, square: u8, pt: PieceType, color: Color| {
+            b.piece_at(square) == Some(Piece::new(pt, color))
+        };
+        let white_king_home = has(&board, 4, PieceType::King, Color::White);
+        let black_king_home = has(&board, 60, PieceType::King, Color::Black);
         board.castling_rights = CastlingRights {
-            white_kingside: castling.contains('K'),
-            white_queenside: castling.contains('Q'),
-            black_kingside: castling.contains('k'),
-            black_queenside: castling.contains('q'),
+            white_kingside: castling.contains('K')
+                && white_king_home
+                && has(&board, 7, PieceType::Rook, Color::White),
+            white_queenside: castling.contains('Q')
+                && white_king_home
+                && has(&board, 0, PieceType::Rook, Color::White),
+            black_kingside: castling.contains('k')
+                && black_king_home
+                && has(&board, 63, PieceType::Rook, Color::Black),
+            black_queenside: castling.contains('q')
+                && black_king_home
+                && has(&board, 56, PieceType::Rook, Color::Black),
         };
 
-        // Parse en passant
+        // Parse en passant: the square behind a pawn that just moved two ranks.
         board.en_passant_square = if parts[3] == "-" {
             None
         } else {
-            square_from_name(parts[3])
+            let ep = square_from_name(parts[3])
+                .ok_or_else(|| format!("Invalid FEN: bad en passant square '{}'", parts[3]))?;
+            let (ep_rank, pusher) = match board.side_to_move {
+                Color::White => (5, Color::Black),
+                Color::Black => (2, Color::White),
+            };
+            // Rank is checked first so the pawn square below cannot underflow.
+            let valid = rank_of(ep) == ep_rank && board.piece_at(ep).is_none() && {
+                let pawn_sq = if pusher == Color::Black {
+                    ep - 8
+                } else {
+                    ep + 8
+                };
+                has(&board, pawn_sq, PieceType::Pawn, pusher)
+            };
+            if !valid {
+                return Err(format!(
+                    "Invalid FEN: en passant square '{}' does not follow a double pawn push",
+                    parts[3]
+                ));
+            }
+            Some(ep)
         };
 
         // Parse halfmove clock and fullmove number
         if parts.len() > 4 {
-            board.halfmove_clock = parts[4].parse().unwrap_or(0);
+            board.halfmove_clock = parts[4]
+                .parse()
+                .map_err(|_| format!("Invalid FEN: bad halfmove clock '{}'", parts[4]))?;
         }
         if parts.len() > 5 {
-            board.fullmove_number = parts[5].parse().unwrap_or(1);
+            board.fullmove_number = parts[5]
+                .parse()
+                .map_err(|_| format!("Invalid FEN: bad fullmove number '{}'", parts[5]))?;
         }
 
+        board.validate_position()?;
         Ok(board)
+    }
+
+    /// Reject placements that cannot arise in chess and that the move
+    /// generator does not handle: missing or extra kings, pawns on the back
+    /// ranks, or the side that just moved left in check.
+    fn validate_position(&self) -> Result<(), String> {
+        for color in [Color::White, Color::Black] {
+            let kings = self.pieces_of_type(color, PieceType::King).count_ones();
+            if kings != 1 {
+                return Err(format!(
+                    "Invalid position: {:?} must have exactly one king, found {}",
+                    color, kings
+                ));
+            }
+            if self.pieces_of_type(color, PieceType::Pawn) & 0xFF00_0000_0000_00FF != 0 {
+                return Err(
+                    "Invalid position: pawns cannot stand on the first or last rank".into(),
+                );
+            }
+        }
+        let (waiting_king, mover) = match self.side_to_move {
+            Color::White => (self.black_king_sq, Color::White),
+            Color::Black => (self.white_king_sq, Color::Black),
+        };
+        if self.is_square_attacked(waiting_king, mover) {
+            return Err("Invalid position: the side not to move is in check".into());
+        }
+        Ok(())
     }
 
     /// Convert board to FEN string
