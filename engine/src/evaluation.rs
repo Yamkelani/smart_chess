@@ -1,5 +1,6 @@
 use crate::board::*;
 use crate::piece::{Color, PieceType};
+use crate::variants::{GameVariant, HILL_SQUARES};
 use crate::zobrist::hash_board;
 use std::time::Instant;
 
@@ -523,6 +524,7 @@ const TT_SIZE: usize = 1 << 20; // ~1 million entries
 /// Thread-local search context that holds the TT, killers, and timing info.
 /// Created once per `search_best_move` call and passed down by reference.
 struct SearchContext {
+    rules: SearchRules,
     tt: Vec<TTEntry>,
     killers: [[Option<crate::moves::Move>; 2]; MAX_KILLER_DEPTH],
     start_time: Instant,
@@ -532,8 +534,9 @@ struct SearchContext {
 }
 
 impl SearchContext {
-    fn new(time_limit_ms: u64) -> Self {
+    fn new(time_limit_ms: u64, rules: SearchRules) -> Self {
         Self {
+            rules,
             tt: vec![TTEntry::default(); TT_SIZE],
             killers: [[None; 2]; MAX_KILLER_DEPTH],
             start_time: Instant::now(),
@@ -562,6 +565,106 @@ impl SearchContext {
         {
             self.stopped = true;
         }
+    }
+}
+
+/// Variant rules the search must respect on top of standard chess.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SearchRules {
+    pub variant: GameVariant,
+    /// Three-Check: checks given so far, indexed [white, black].
+    pub checks_given: [u8; 2],
+}
+
+/// Score of a won or lost game, matching the checkmate scores below: a
+/// result found with more depth remaining is nearer the root, so it scores
+/// further from zero and the search prefers the quickest win.
+fn game_over_score(won: bool, depth: u8) -> i32 {
+    let score = 19000 + depth as i32;
+    if won {
+        score
+    } else {
+        -score
+    }
+}
+
+impl SearchContext {
+    /// The score for the side to move if the variant's own rule has already
+    /// ended the game in this position.
+    fn variant_result(&self, board: &Board, depth: u8) -> Option<i32> {
+        self.rules
+            .variant
+            .winner_by_rule(board, self.rules.checks_given)
+            .map(|winner| game_over_score(winner == board.side_to_move, depth))
+    }
+
+    /// Three-Check: record a check given by `mover`'s move to `after`.
+    /// Returns whether one was recorded, to pass to `uncount_check`.
+    fn count_check(&mut self, mover: Color, after: &Board) -> bool {
+        let counted = self.rules.variant == GameVariant::ThreeCheck && after.is_in_check();
+        if counted {
+            self.rules.checks_given[color_index(mover)] += 1;
+        }
+        counted
+    }
+
+    fn uncount_check(&mut self, mover: Color, counted: bool) {
+        if counted {
+            self.rules.checks_given[color_index(mover)] -= 1;
+        }
+    }
+
+    /// Transposition-table key. In Three-Check the same board with different
+    /// check counts is a different position, so the counts are mixed in.
+    fn node_hash(&self, board: &Board) -> u64 {
+        let hash = hash_board(board);
+        if self.rules.variant != GameVariant::ThreeCheck {
+            return hash;
+        }
+        let [white, black] = self.rules.checks_given;
+        hash ^ (white as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (black as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+    }
+}
+
+fn color_index(color: Color) -> usize {
+    match color {
+        Color::White => 0,
+        Color::Black => 1,
+    }
+}
+
+/// Positional terms for the variant's own goal, from the side to move's view.
+fn evaluate_variant(board: &Board, rules: &SearchRules) -> i32 {
+    let white = match rules.variant {
+        GameVariant::KingOfTheHill => {
+            // Reward each king for nearness to the hill. Distance 0 is a win
+            // and never evaluated; no square is more than 3 steps away.
+            let nearness = |king_sq: u8| -> i32 {
+                let dist = HILL_SQUARES
+                    .iter()
+                    .map(|&hill| {
+                        let df = (king_sq % 8).abs_diff(hill % 8);
+                        let dr = (king_sq / 8).abs_diff(hill / 8);
+                        df.max(dr) as i32
+                    })
+                    .min()
+                    .unwrap_or(3);
+                (3 - dist) * 40
+            };
+            nearness(board.white_king_sq) - nearness(board.black_king_sq)
+        }
+        GameVariant::ThreeCheck => {
+            // Each check brings the win closer; the second is worth far more.
+            const CHECK_VALUE: [i32; 3] = [0, 120, 400];
+            let value = |checks: u8| CHECK_VALUE[(checks as usize).min(2)];
+            value(rules.checks_given[0]) - value(rules.checks_given[1])
+        }
+        _ => 0,
+    };
+    match board.side_to_move {
+        Color::White => white,
+        Color::Black => -white,
     }
 }
 
@@ -680,6 +783,16 @@ pub fn search_best_move_timed(
     depth: u8,
     time_limit_ms: u64,
 ) -> Option<(crate::moves::Move, i32)> {
+    search_best_move_with_rules(board, SearchRules::default(), depth, time_limit_ms)
+}
+
+/// `search_best_move_timed` for a game played under a variant's rules.
+pub fn search_best_move_with_rules(
+    board: &Board,
+    rules: SearchRules,
+    depth: u8,
+    time_limit_ms: u64,
+) -> Option<(crate::moves::Move, i32)> {
     use crate::moves::{generate_legal_moves, make_move};
 
     let moves = generate_legal_moves(board);
@@ -687,8 +800,8 @@ pub fn search_best_move_timed(
         return None;
     }
 
-    let mut ctx = SearchContext::new(time_limit_ms);
-    let hash = hash_board(board);
+    let mut ctx = SearchContext::new(time_limit_ms, rules);
+    let hash = ctx.node_hash(board);
     let mut best_move = moves[0];
     let mut best_score = i32::MIN + 1;
 
@@ -708,6 +821,7 @@ pub fn search_best_move_timed(
         for mv in &ordered {
             let mut new_board = board.clone();
             if make_move(&mut new_board, mv) {
+                let counted = ctx.count_check(board.side_to_move, &new_board);
                 let score = -alpha_beta(
                     &new_board,
                     d - 1,
@@ -715,6 +829,7 @@ pub fn search_best_move_timed(
                     -current_score.max(i32::MIN + 1),
                     &mut ctx,
                 );
+                ctx.uncount_check(board.side_to_move, counted);
                 if ctx.stopped {
                     aborted = true;
                     break;
@@ -919,8 +1034,13 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
         return 0;
     }
 
+    // ── Game already won by the variant's own rule ──
+    if let Some(score) = ctx.variant_result(board, depth) {
+        return score;
+    }
+
     // ── Transposition table probe ──
-    let hash = hash_board(board);
+    let hash = ctx.node_hash(board);
     if let Some(entry) = tt_probe(ctx, hash) {
         if entry.depth >= depth {
             match entry.flag {
@@ -968,7 +1088,7 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
     let mut moves = generate_legal_moves(board);
     if moves.is_empty() {
         if in_check {
-            return -19000 - depth as i32;
+            return game_over_score(false, depth);
         }
         return 0;
     }
@@ -987,12 +1107,11 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
             continue;
         }
 
-        let score;
-
         let is_capture = board.piece_at(mv.to).is_some() || mv.is_en_passant;
         let gives_check = new_board.is_in_check();
+        let counted = ctx.count_check(board.side_to_move, &new_board);
 
-        if moves_searched >= 4
+        let score = if moves_searched >= 4
             && depth >= 3
             && !is_capture
             && !in_check
@@ -1000,17 +1119,15 @@ fn alpha_beta(board: &Board, depth: u8, mut alpha: i32, beta: i32, ctx: &mut Sea
             && mv.promotion.is_none()
         {
             let reduced = -alpha_beta(&new_board, depth - 2, -alpha - 1, -alpha, ctx);
-            if ctx.stopped {
-                return 0;
-            }
-            if reduced > alpha {
-                score = -alpha_beta(&new_board, depth - 1, -beta, -alpha, ctx);
+            if !ctx.stopped && reduced > alpha {
+                -alpha_beta(&new_board, depth - 1, -beta, -alpha, ctx)
             } else {
-                score = reduced;
+                reduced
             }
         } else {
-            score = -alpha_beta(&new_board, depth - 1, -beta, -alpha, ctx);
-        }
+            -alpha_beta(&new_board, depth - 1, -beta, -alpha, ctx)
+        };
+        ctx.uncount_check(board.side_to_move, counted);
 
         if ctx.stopped {
             return 0;
@@ -1064,8 +1181,11 @@ fn quiescence_search(
     if ctx.stopped {
         return 0;
     }
+    if let Some(score) = ctx.variant_result(board, 0) {
+        return score;
+    }
 
-    let stand_pat = evaluate(board);
+    let stand_pat = evaluate(board) + evaluate_variant(board, &ctx.rules);
     if stand_pat >= beta {
         return beta;
     }
@@ -1085,7 +1205,9 @@ fn quiescence_search(
     for mv in &moves {
         let mut new_board = board.clone();
         if make_move(&mut new_board, mv) {
+            let counted = ctx.count_check(board.side_to_move, &new_board);
             let score = -quiescence_search(&new_board, -beta, -alpha, max_depth - 1, ctx);
+            ctx.uncount_check(board.side_to_move, counted);
             if ctx.stopped {
                 return 0;
             }

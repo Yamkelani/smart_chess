@@ -1,6 +1,8 @@
 use crate::board::Board;
 use crate::chess960;
+use crate::evaluation::SearchRules;
 use crate::moves::{generate_legal_moves, make_move, Move};
+use crate::piece::Color;
 use crate::variants::GameVariant;
 use crate::zobrist::hash_board;
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,9 @@ pub enum GameStatus {
     Stalemate,
     Draw,             // By repetition, 50-move rule, etc.
     Resigned(String), // Color that resigned
+    /// Won by the variant's own rule (King of the Hill, Three-Check). Holds
+    /// the winning colour.
+    VariantWin(String),
 }
 
 impl GameStatus {
@@ -23,7 +28,7 @@ impl GameStatus {
     /// included — which is a display form, not a wire contract.
     pub fn winner(&self) -> Option<&str> {
         match self {
-            GameStatus::Checkmate(winner) => Some(winner.as_str()),
+            GameStatus::Checkmate(winner) | GameStatus::VariantWin(winner) => Some(winner.as_str()),
             // The colour recorded is the one that resigned, so the winner is the other.
             GameStatus::Resigned(loser) => match loser.as_str() {
                 "white" => Some("black"),
@@ -65,6 +70,25 @@ pub struct GameState {
     /// existed load as standard.
     #[serde(default)]
     pub variant: GameVariant,
+    /// Three-Check: checks given so far, indexed [white, black]. Always zero
+    /// in other variants.
+    #[serde(default)]
+    pub checks_given: [u8; 2],
+}
+
+/// Three-Check counts as sent to clients.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct CheckCount {
+    pub white: u8,
+    pub black: u8,
+}
+
+/// Index of a colour in per-colour arrays such as `checks_given`.
+fn color_index(color: Color) -> usize {
+    match color {
+        Color::White => 0,
+        Color::Black => 1,
+    }
 }
 
 impl Default for GameState {
@@ -90,6 +114,7 @@ impl GameState {
             is_analysis: false,
             owner: None,
             variant: GameVariant::Standard,
+            checks_given: [0, 0],
         }
     }
 
@@ -125,6 +150,7 @@ impl GameState {
             is_analysis: false,
             owner: None,
             variant: GameVariant::Standard,
+            checks_given: [0, 0],
         })
     }
 
@@ -163,9 +189,18 @@ impl GameState {
         self.fen_history.push(self.board.to_fen());
         self.hash_history.push(hash_board(&self.board));
 
-        // Check for game-ending conditions
+        let mover = self.board.side_to_move.opposite();
+        if self.variant == GameVariant::ThreeCheck && self.board.is_in_check() {
+            self.checks_given[color_index(mover)] += 1;
+        }
+
+        // Check for game-ending conditions. A variant's own win comes first:
+        // reaching the hill or giving the third check ends the game even if
+        // the opponent is also left without a move.
         let next_legal_moves = generate_legal_moves(&self.board);
-        if next_legal_moves.is_empty() {
+        if let Some(winner) = self.variant.winner_by_rule(&self.board, self.checks_given) {
+            self.status = GameStatus::VariantWin(format!("{}", winner));
+        } else if next_legal_moves.is_empty() {
             if self.board.is_in_check() {
                 let winner = self.board.side_to_move.opposite();
                 self.status = GameStatus::Checkmate(format!("{}", winner));
@@ -226,7 +261,39 @@ impl GameState {
             .ok_or("History is empty; cannot restore a position")?;
         self.board = Board::from_fen(target)?;
         self.status = GameStatus::Active;
+        self.recount_checks()
+    }
+
+    /// Rebuild the Three-Check counts from the recorded positions: a position
+    /// that is in check after a move is a check given by the side that moved.
+    fn recount_checks(&mut self) -> Result<(), String> {
+        self.checks_given = [0, 0];
+        if self.variant != GameVariant::ThreeCheck {
+            return Ok(());
+        }
+        for fen in self.fen_history.iter().skip(1) {
+            let board = Board::from_fen(fen)?;
+            if board.is_in_check() {
+                self.checks_given[color_index(board.side_to_move.opposite())] += 1;
+            }
+        }
         Ok(())
+    }
+
+    /// The check count for clients to display: Three-Check games only.
+    pub fn check_count(&self) -> Option<CheckCount> {
+        (self.variant == GameVariant::ThreeCheck).then_some(CheckCount {
+            white: self.checks_given[0],
+            black: self.checks_given[1],
+        })
+    }
+
+    /// What the engine's search needs to know to play this game's variant.
+    pub fn search_rules(&self) -> SearchRules {
+        SearchRules {
+            variant: self.variant,
+            checks_given: self.checks_given,
+        }
     }
 
     /// Replace the position with an arbitrary one, discarding all history.
@@ -248,6 +315,7 @@ impl GameState {
         self.hash_history = vec![hash];
         self.status = GameStatus::Active;
         self.is_analysis = true;
+        self.checks_given = [0, 0];
         Ok(())
     }
 

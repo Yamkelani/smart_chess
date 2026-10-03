@@ -91,6 +91,7 @@ const HIGHLIGHT_LEGAL      = 0x4488ff;
 const HIGHLIGHT_LAST_MOVE  = 0xffd700;
 const HIGHLIGHT_CHECK       = 0xff2244;
 const HIGHLIGHT_HINT        = 0x00e5ff;
+const HILL_TINT             = 0xff9f43;
 
 // Analysis arrow colors ranked by move quality (best → worst)
 const ANALYSIS_COLORS = [
@@ -108,6 +109,7 @@ export class ChessBoard3D {
     this.pieceMeshes = new Map();
     this.squareMeshes = new Map();
     this.highlightMeshes = [];
+    this._hillMeshes = [];
     this.ringMeshes = [];
     this.particles = [];
     this.selectedSquare = null;
@@ -1303,6 +1305,31 @@ export class ChessBoard3D {
   }
 
   // ---- Highlights ----
+
+  /** King of the Hill: faintly tint the four centre squares, or remove the tint. */
+  setHillMarkers(enabled) {
+    for (const mesh of this._hillMeshes) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+    }
+    this._hillMeshes = [];
+    if (!enabled) return;
+
+    for (const sq of ['d4', 'e4', 'd5', 'e5']) {
+      const { file, rank } = this._fromAlgebraic(sq);
+      const pos = this._squareToWorld(file, rank);
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(SQUARE_SIZE * 0.96, SQUARE_SIZE * 0.96),
+        new THREE.MeshBasicMaterial({ color: HILL_TINT, transparent: true, opacity: 0.16, depthTest: false }),
+      );
+      mesh.rotation.x = -Math.PI / 2;
+      // Just under the move highlights (0.042) so those still show on top.
+      mesh.position.set(pos.x, 0.041, pos.z);
+      this.scene.add(mesh);
+      this._hillMeshes.push(mesh);
+    }
+  }
 
   clearHighlights() {
     for (const mesh of this.highlightMeshes) {

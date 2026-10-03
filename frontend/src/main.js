@@ -39,6 +39,7 @@ class ChessGame {
     this.api = new ChessAPI();
     this.gameId = null;
     this.variant = 'standard';
+    this.checks = null; // Three-Check: { white, black } checks given
     this.fen = null;
     this.pieces = [];
     this.legalMoves = [];
@@ -981,7 +982,7 @@ class ChessGame {
         ? await this.api.newGame()
         : await this.api.newVariantGame(variant);
       this.gameId = data.game_id;
-      this.variant = data.variant || 'standard';
+      this._adoptVariant(data);
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -1080,6 +1081,13 @@ class ChessGame {
         sounds.playSelect();
       }
     }
+  }
+
+  /** Record the variant of the game just started and set up its extras. */
+  _adoptVariant(data) {
+    this.variant = data.variant || 'standard';
+    this.checks = data.checks ?? (this.variant === 'threecheck' ? { white: 0, black: 0 } : null);
+    this.board.setHillMarkers(this.variant === 'kingofthehill');
   }
 
   _isPlayerTurn() {
@@ -1199,6 +1207,7 @@ class ChessGame {
       this.isCheck = data.is_check;
       this.status = data.status;
       this.winner = data.winner ?? null;
+      this.checks = data.checks ?? null;
       this.isAnalysis = data.is_analysis ?? this.isAnalysis;
       this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
 
@@ -1327,6 +1336,7 @@ class ChessGame {
           this.isCheck = gameData.is_check;
           this.status = gameData.status;
           this.winner = gameData.winner ?? null;
+          this.checks = gameData.checks ?? null;
           this.isAnalysis = gameData.is_analysis ?? this.isAnalysis;
           this.sideToMove = gameData.side_to_move;
 
@@ -1363,6 +1373,7 @@ class ChessGame {
           this.isCheck = gameData.is_check;
           this.status = gameData.status;
           this.winner = gameData.winner ?? null;
+          this.checks = gameData.checks ?? null;
           this.isAnalysis = gameData.is_analysis ?? this.isAnalysis;
           this.sideToMove = gameData.side_to_move;
           const san2 = this._uciToSAN(engineResult.move_uci, prevPieces2, gameData.pieces, gameData.is_check, gameData.status, false);
@@ -1468,6 +1479,7 @@ class ChessGame {
     this.isCheck = data.is_check;
     this.status = data.status;
     this.winner = data.winner ?? null;
+    this.checks = data.checks ?? null;
     this.isAnalysis = data.is_analysis ?? this.isAnalysis;
     this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
 
@@ -1734,12 +1746,12 @@ class ChessGame {
           // Fallback: create new game if undo is not available
           data = await this.api.newGame(targetFen);
           this.gameId = data.game_id;
-          this.variant = data.variant || 'standard';
+          this._adoptVariant(data);
         }
       } else {
         data = await this.api.newGame(targetFen);
         this.gameId = data.game_id;
-        this.variant = data.variant || 'standard';
+        this._adoptVariant(data);
       }
       this.fen = data.fen;
       this.pieces = data.pieces;
@@ -1815,6 +1827,7 @@ class ChessGame {
       this.isCheck = data.is_check;
       this.status = data.status;
       this.winner = data.winner ?? null;
+      this.checks = data.checks ?? null;
       this.isAnalysis = data.is_analysis ?? this.isAnalysis;
       this.sideToMove = this.moveHistory.length % 2 === 0 ? 'white' : 'black';
       this.selectedSquare = null;
@@ -2419,7 +2432,7 @@ class ChessGame {
       // Load the puzzle FEN position
       const data = await this.api.newGame(puzzle.fen);
       this.gameId = data.game_id;
-      this.variant = data.variant || 'standard';
+      this._adoptVariant(data);
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -2747,7 +2760,7 @@ class ChessGame {
       // Load the drill FEN
       const data = await this.api.newGame(drill.fen);
       this.gameId = data.game_id;
-      this.variant = data.variant || 'standard';
+      this._adoptVariant(data);
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -3024,7 +3037,7 @@ class ChessGame {
       const startFen = result.starting_fen;
       const data = await this.api.newGame(startFen === 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' ? null : startFen);
       this.gameId = data.game_id;
-      this.variant = data.variant || 'standard';
+      this._adoptVariant(data);
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -3097,7 +3110,7 @@ class ChessGame {
           // Fallback: create new game if setPosition not available
           data = await this.api.newGame(fen);
           this.gameId = data.game_id;
-          this.variant = data.variant || 'standard';
+          this._adoptVariant(data);
         }
         this.fen = data.fen;
         this.pieces = data.pieces;
@@ -3177,7 +3190,7 @@ class ChessGame {
     try {
       const data = await this.api.newGame(fen);
       this.gameId = data.game_id;
-      this.variant = data.variant || 'standard';
+      this._adoptVariant(data);
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -3501,9 +3514,19 @@ class ChessGame {
     if (this.isCheck) {
       infoEl.textContent = 'Check!';
     } else if (this.status !== 'Active') {
-      infoEl.textContent = this.status;
+      infoEl.textContent = this._statusLabel();
     } else {
       infoEl.textContent = `Move ${Math.floor(this.moveHistory.length / 2) + 1}`;
+    }
+
+    // Three-Check: checks given by each side, as filled pips out of three
+    const checksEl = document.getElementById('checks-display');
+    if (checksEl) {
+      checksEl.hidden = !this.checks;
+      if (this.checks) {
+        const pips = (n) => '●'.repeat(Math.min(n, 3)) + '○'.repeat(Math.max(0, 3 - n));
+        checksEl.textContent = `Checks  ♔ ${pips(this.checks.white)}   ♚ ${pips(this.checks.black)}`;
+      }
     }
 
     // Move list
@@ -3904,6 +3927,19 @@ class ChessGame {
     }
   }
 
+  /** Readable game status; the engine's status string is a debug rendering. */
+  _statusLabel() {
+    if (this.status.startsWith('VariantWin')) {
+      const how = this.variant === 'threecheck' ? 'Three checks' : 'King of the Hill';
+      return `${how} — ${this._capitalise(this.winner || '')} wins`;
+    }
+    return this.status;
+  }
+
+  _capitalise(text) {
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
   _showGameOver() {
     const overlay = document.getElementById('overlay');
     const title = document.getElementById('overlay-title');
@@ -3923,6 +3959,16 @@ class ChessGame {
     } else if (this.status.includes('Draw')) {
       title.textContent = 'Draw';
       msg.textContent = this.status;
+    } else if (this.status.startsWith('VariantWin')) {
+      const winner = this._capitalise(this.winner || '');
+      if (this.variant === 'threecheck') {
+        title.textContent = 'Three Checks!';
+        msg.textContent = `${winner} gave the third check — ${winner} wins`;
+      } else {
+        title.textContent = 'King of the Hill!';
+        msg.textContent = `${winner}'s king reached the centre — ${winner} wins`;
+      }
+      isWin = this.winner === this.playerColor;
     } else {
       title.textContent = 'Game Over';
       msg.textContent = this.status;
@@ -4196,6 +4242,7 @@ class ChessGame {
     this._closeModal('multiplayer-modal');
     this._multiplayerActive = true;
     this.useAI = false;
+    this._adoptVariant({ variant: this.multiplayer.variant, checks: data.checks });
     if (data.fen) {
       await this._loadPosition(data.fen, data.pieces, data.legal_moves);
     }
@@ -4211,6 +4258,7 @@ class ChessGame {
       this.sideToMove = data.side_to_move || 'white';
       this.isCheck = data.is_check || false;
       this.moveHistory = data.move_history || [];
+      this.checks = data.checks ?? null;
       this.board.updatePieces(this.pieces);
       this._updateUI();
     }
