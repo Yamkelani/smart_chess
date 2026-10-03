@@ -29,6 +29,8 @@ log = "0.4"
 env_logger = "0.10"
 uuid = { version = "1", features = ["v4"] }
 lazy_static = "1.5"
+hmac = "0.12"
+sha2 = "0.10"
 
 [profile.release]
 opt-level = 3

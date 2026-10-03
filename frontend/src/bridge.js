@@ -72,3 +72,50 @@ export function getAiBaseUrl() {
 export function getEngineBaseUrl() {
   return '/api/engine';
 }
+
+// ── Guest session ────────────────────────────────────────────────
+// The engine issues a signed guest token (POST /session) that identifies this
+// browser on later requests. The embedded Tauri engine is local and needs none.
+
+const SESSION_KEY = 'chess3d_session';
+const RENEW_MARGIN_MS = 24 * 60 * 60 * 1000;
+let _sessionRequest = null;
+
+function _storedSession() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY));
+    return s && s.token && s.expires_at * 1000 - RENEW_MARGIN_MS > Date.now() ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+async function _sessionToken() {
+  if (isTauri()) return null;
+  const stored = _storedSession();
+  if (stored) return stored.token;
+  if (!_sessionRequest) {
+    _sessionRequest = fetch(`${getEngineBaseUrl()}/session`, { method: 'POST' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(s => {
+        if (!s || !s.token) return null;
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch { /* storage unavailable */ }
+        return s.token;
+      })
+      .catch(() => null)
+      .finally(() => { _sessionRequest = null; });
+  }
+  return _sessionRequest;
+}
+
+/**
+ * fetch() for our own engine and AI service: attaches the guest token when
+ * one is available, and otherwise sends the request unchanged.
+ */
+export async function apiFetch(url, options = {}) {
+  const token = await _sessionToken();
+  if (!token) return fetch(url, options);
+  const headers = new Headers(options.headers || {});
+  headers.set('Authorization', `Bearer ${token}`);
+  return fetch(url, { ...options, headers });
+}

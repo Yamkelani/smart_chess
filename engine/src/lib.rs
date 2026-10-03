@@ -8,5 +8,6 @@ pub mod moves;
 pub mod multiplayer;
 pub mod persistence;
 pub mod piece;
+pub mod session;
 pub mod variants;
 pub mod zobrist;

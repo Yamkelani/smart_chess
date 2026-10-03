@@ -3,7 +3,7 @@ use actix_web::{web, App, HttpServer};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use chess_engine::{api, multiplayer, persistence};
+use chess_engine::{api, multiplayer, persistence, session};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -26,6 +26,14 @@ async fn main() -> std::io::Result<()> {
     });
 
     let mp_state = web::Data::new(multiplayer::MultiplayerState::new());
+
+    let session_config = match session::SessionConfig::from_env() {
+        Ok(c) => web::Data::new(c),
+        Err(e) => {
+            log::error!("Invalid session configuration: {}", e);
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e));
+        }
+    };
 
     // Allowed CORS origins — set ALLOWED_ORIGINS env var as a comma-separated list.
     // Defaults to localhost dev origins only.
@@ -51,6 +59,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .app_data(app_state.clone())
             .app_data(mp_state.clone())
+            .app_data(session_config.clone())
             .configure(api::configure_routes)
             .configure(multiplayer::configure_multiplayer_routes)
     })

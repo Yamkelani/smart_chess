@@ -4,7 +4,7 @@
  * Uses polling-based REST API for real-time multiplayer.
  * Players create/join rooms with 6-character codes.
  */
-import { isTauri, getEngineBaseUrl } from './bridge.js';
+import { isTauri, getEngineBaseUrl, apiFetch } from './bridge.js';
 
 function getBase() { return isTauri() ? '' : '/api/engine'; }
 
@@ -51,7 +51,7 @@ export class MultiplayerManager {
   }
 
   async createRoom(options = {}) {
-    const resp = await fetch(`${getBase()}/multiplayer/room/create`, {
+    const resp = await apiFetch(`${getBase()}/multiplayer/room/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -75,7 +75,7 @@ export class MultiplayerManager {
   }
 
   async joinRoom(code) {
-    const resp = await fetch(`${getBase()}/multiplayer/room/join`, {
+    const resp = await apiFetch(`${getBase()}/multiplayer/room/join`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -101,7 +101,7 @@ export class MultiplayerManager {
   }
 
   async spectateRoom(roomId) {
-    const resp = await fetch(`${getBase()}/multiplayer/room/${roomId}/spectate`, {
+    const resp = await apiFetch(`${getBase()}/multiplayer/room/${roomId}/spectate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -119,7 +119,7 @@ export class MultiplayerManager {
 
   async makeMove(uci) {
     if (!this.roomId) return null;
-    const resp = await fetch(`${getBase()}/multiplayer/room/${this.roomId}/move`, {
+    const resp = await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -136,7 +136,7 @@ export class MultiplayerManager {
 
   async sendChat(text) {
     if (!this.roomId) return;
-    await fetch(`${getBase()}/multiplayer/room/${this.roomId}/chat`, {
+    await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -149,7 +149,7 @@ export class MultiplayerManager {
 
   async sendEmote(emote) {
     if (!this.roomId) return;
-    await fetch(`${getBase()}/multiplayer/room/${this.roomId}/chat`, {
+    await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -162,7 +162,7 @@ export class MultiplayerManager {
 
   async requestRematch() {
     if (!this.roomId) return;
-    const resp = await fetch(`${getBase()}/multiplayer/room/${this.roomId}/rematch`, {
+    const resp = await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/rematch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ player_id: this.playerId }),
@@ -174,7 +174,7 @@ export class MultiplayerManager {
     if (!this.roomId) return;
     this._stopPolling();
     try {
-      await fetch(`${getBase()}/multiplayer/room/${this.roomId}/leave`, {
+      await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/leave`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ player_id: this.playerId }),
@@ -189,13 +189,13 @@ export class MultiplayerManager {
   }
 
   async listRooms() {
-    const resp = await fetch(`${getBase()}/multiplayer/rooms`);
+    const resp = await apiFetch(`${getBase()}/multiplayer/rooms`);
     if (!resp.ok) return [];
     return resp.json();
   }
 
   async getLeaderboard() {
-    const resp = await fetch(`${getBase()}/leaderboard`);
+    const resp = await apiFetch(`${getBase()}/leaderboard`);
     if (!resp.ok) return [];
     return resp.json();
   }
@@ -209,7 +209,7 @@ export class MultiplayerManager {
    * are disabled, which is the default until identity is authenticated.
    */
   async updateLeaderboard(result) {
-    const resp = await fetch(`${getBase()}/leaderboard/update`, {
+    const resp = await apiFetch(`${getBase()}/leaderboard/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -237,7 +237,7 @@ export class MultiplayerManager {
   async _poll() {
     if (!this.roomId) return;
     try {
-      const resp = await fetch(`${getBase()}/multiplayer/room/${this.roomId}/poll`, {
+      const resp = await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/poll`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -270,6 +270,15 @@ pub async fn health_check() -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({"status": "ok", "service": "chess-engine"}))
 }
 
+/// Issue a new guest identity: a random player id and a signed token.
+pub async fn create_session(config: web::Data<crate::session::SessionConfig>) -> impl Responder {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    HttpResponse::Ok().json(config.issue(now))
+}
+
 pub async fn engine_info() -> impl Responder {
     HttpResponse::Ok().json(EngineInfoResponse {
         name: "3D Chess Rust Engine".to_string(),
@@ -893,6 +902,7 @@ pub async fn draw_game(data: web::Data<AppState>, path: web::Path<String>) -> im
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/health", web::get().to(health_check))
         .route("/info", web::get().to(engine_info))
+        .route("/session", web::post().to(create_session))
         .route("/game/new", web::post().to(new_game))
         .route("/game/{id}", web::get().to(get_game))
         .route("/game/{id}/move", web::post().to(make_move))
