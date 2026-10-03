@@ -663,6 +663,7 @@ pub async fn request_rematch(
     req: HttpRequest,
     config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
+    game_state: web::Data<crate::api::AppState>,
     path: web::Path<String>,
 ) -> impl Responder {
     let player_id = try_auth!(caller_id(&req, &config));
@@ -682,6 +683,11 @@ pub async fn request_rematch(
                 // Both players want rematch — start new game
                 let game = GameState::new();
                 let game_id = game.id.clone();
+                game_state
+                    .games
+                    .lock()
+                    .unwrap()
+                    .insert(game_id.clone(), game);
                 room.game_id = Some(game_id.clone());
                 room.status = RoomStatus::Playing;
                 room.rematch_requested_by = None;
