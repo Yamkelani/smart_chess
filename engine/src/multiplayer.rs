@@ -103,6 +103,12 @@ impl MultiplayerRoom {
         }
     }
 
+    /// The variant this room plays. `variant` is validated when the room is
+    /// created, so the fallback is never reached in practice.
+    pub fn game_variant(&self) -> crate::variants::GameVariant {
+        crate::variants::GameVariant::from_str(&self.variant).unwrap_or_default()
+    }
+
     /// True for the seated players and anyone spectating.
     pub fn is_participant(&self, player_id: &str) -> bool {
         self.color_of(player_id).is_some() || self.spectators.iter().any(|s| s.id == player_id)
@@ -431,8 +437,7 @@ pub async fn join_room(
     room.status = RoomStatus::Ready;
     room.last_activity = now_epoch();
 
-    // Create the game
-    let game = GameState::new();
+    let game = GameState::new_variant(room.game_variant(), None);
     let game_id = game.id.clone();
     room.game_id = Some(game_id.clone());
     room.status = RoomStatus::Playing;
@@ -736,7 +741,7 @@ pub async fn request_rematch(
                 && room.rematch_requested_by.as_deref() != Some(player_id.as_str())
             {
                 // Both players want rematch — start new game
-                let game = GameState::new();
+                let game = GameState::new_variant(room.game_variant(), None);
                 let game_id = game.id.clone();
                 game_state
                     .games

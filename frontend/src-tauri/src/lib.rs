@@ -20,6 +20,7 @@ pub fn run() {
         .manage(engine_state)
         .invoke_handler(tauri::generate_handler![
             engine::new_game,
+            engine::new_variant_game,
             engine::get_game,
             engine::make_move,
             engine::get_legal_moves,

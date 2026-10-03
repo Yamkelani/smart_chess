@@ -12,6 +12,7 @@ const SEARCH_TIME_LIMIT_MS: u64 = 3000;
 const MAX_SEARCH_DEPTH: u8 = 12;
 use chess_engine::game::GameState;
 use chess_engine::moves::generate_legal_moves;
+use chess_engine::variants::GameVariant;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -29,6 +30,7 @@ pub struct EngineState {
 #[derive(Serialize)]
 pub struct NewGameResponse {
     pub game_id: String,
+    pub variant: String,
     pub fen: String,
     pub pieces: Vec<chess_engine::board::PieceInfo>,
     pub legal_moves: Vec<String>,
@@ -37,6 +39,7 @@ pub struct NewGameResponse {
 #[derive(Serialize)]
 pub struct GameStateResponse {
     pub game_id: String,
+    pub variant: String,
     pub fen: String,
     pub side_to_move: String,
     pub pieces: Vec<chess_engine::board::PieceInfo>,
@@ -98,9 +101,33 @@ pub fn new_game(state: State<'_, EngineState>, fen: Option<String>) -> Result<Ne
     } else {
         GameState::new()
     };
+    store_new_game(&state, game)
+}
 
+/// Mirrors the server's `POST /game/new-variant`. A custom start position is
+/// honoured for every variant except Chess960.
+#[tauri::command]
+pub fn new_variant_game(
+    state: State<'_, EngineState>,
+    variant: String,
+    fen: Option<String>,
+) -> Result<NewGameResponse, String> {
+    let variant = GameVariant::from_str(&variant).ok_or("Unknown variant")?;
+    let game = match fen {
+        Some(fen_str) if variant != GameVariant::Chess960 => {
+            let mut game = GameState::from_fen(&fen_str)?;
+            game.variant = variant;
+            game
+        }
+        _ => GameState::new_variant(variant, None),
+    };
+    store_new_game(&state, game)
+}
+
+fn store_new_game(state: &State<'_, EngineState>, game: GameState) -> Result<NewGameResponse, String> {
     let response = NewGameResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         pieces: game.board.to_piece_list(),
         legal_moves: game.get_legal_moves(),
@@ -118,6 +145,7 @@ pub fn get_game(state: State<'_, EngineState>, game_id: String) -> Result<GameSt
 
     Ok(GameStateResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         side_to_move: format!("{}", game.board.side_to_move),
         pieces: game.board.to_piece_list(),

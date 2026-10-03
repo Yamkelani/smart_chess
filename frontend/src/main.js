@@ -38,6 +38,7 @@ class ChessGame {
   constructor() {
     this.api = new ChessAPI();
     this.gameId = null;
+    this.variant = 'standard';
     this.fen = null;
     this.pieces = [];
     this.legalMoves = [];
@@ -120,10 +121,6 @@ class ChessGame {
     this.multiplayer = new MultiplayerManager();
     this._multiplayerActive = false;
 
-    // Variant
-    this._gameVariant = 'standard';
-    this._chess960Id = null;
-
     // Blindfold mode
     this._blindfoldMode = false;
 
@@ -162,7 +159,6 @@ class ChessGame {
     this._initTimedDrills();
     this._initPositionEditor();
     this._initBlindfoldMode();
-    this._initVariantSelector();
     this._initCosmeticsPanel();
     this._initLeaderboard();
     this._initMonitoring();
@@ -922,6 +918,7 @@ class ChessGame {
     this.isAnalysis = false;
     this.playerColor = document.getElementById('color-select').value;
     this.useAI = document.getElementById('use-ai').checked;
+    const variant = document.getElementById('variant-select')?.value || 'standard';
 
     // Preserve last game data for review
     if (this._fenLog.length > 1) {
@@ -980,8 +977,11 @@ class ChessGame {
     sounds.playSelect();
 
     try {
-      const data = await this.api.newGame();
+      const data = variant === 'standard'
+        ? await this.api.newGame()
+        : await this.api.newVariantGame(variant);
       this.gameId = data.game_id;
+      this.variant = data.variant || 'standard';
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -1289,10 +1289,13 @@ class ChessGame {
     await new Promise(r => setTimeout(r, thinkTime));
 
     try {
-      // Try the neural network AI first
+      // Try the neural network AI first. It only knows standard chess, so
+      // variant games go straight to the engine, which plays the variant's rules.
       let moveUci = null;
 
-      const aiResult = await this.api.aiMove(this.fen, difficulty, this.gameId, this.playerColor, this.aiPersonality);
+      const aiResult = this.variant === 'standard'
+        ? await this.api.aiMove(this.fen, difficulty, this.gameId, this.playerColor, this.aiPersonality)
+        : null;
       if (aiResult && aiResult.move) {
         moveUci = aiResult.move;
       } else {
@@ -1731,10 +1734,12 @@ class ChessGame {
           // Fallback: create new game if undo is not available
           data = await this.api.newGame(targetFen);
           this.gameId = data.game_id;
+          this.variant = data.variant || 'standard';
         }
       } else {
         data = await this.api.newGame(targetFen);
         this.gameId = data.game_id;
+        this.variant = data.variant || 'standard';
       }
       this.fen = data.fen;
       this.pieces = data.pieces;
@@ -2174,8 +2179,8 @@ class ChessGame {
   // ── Game End Handler (rating, achievements, save, learn) ──
 
   _onGameEnd() {
-    // Signal AI learning
-    if (this.useAI) {
+    // Signal AI learning. The model learns standard chess only.
+    if (this.useAI && this.variant === 'standard') {
       this.api.gameComplete(this.gameId, this.status, this.playerColor, this.winner);
     }
 
@@ -2190,10 +2195,11 @@ class ChessGame {
 
     const difficulty = document.getElementById('difficulty-select').value;
 
-    // Update rating (skip in friendly mode, and for games whose position was
-    // hand-placed — those did not arise from play and must not be rated).
+    // Update rating (skip in friendly mode, for games whose position was
+    // hand-placed — those did not arise from play and must not be rated — and
+    // for variant games, since the rating measures standard chess).
     let ratingResult = { change: 0, newRating: getRating().rating };
-    if (this.gameMode !== 'friendly' && !this.isAnalysis) {
+    if (this.gameMode !== 'friendly' && !this.isAnalysis && this.variant === 'standard') {
       ratingResult = updateRating(result, difficulty);
       this._refreshRatingDisplay();
     }
@@ -2413,6 +2419,7 @@ class ChessGame {
       // Load the puzzle FEN position
       const data = await this.api.newGame(puzzle.fen);
       this.gameId = data.game_id;
+      this.variant = data.variant || 'standard';
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -2740,6 +2747,7 @@ class ChessGame {
       // Load the drill FEN
       const data = await this.api.newGame(drill.fen);
       this.gameId = data.game_id;
+      this.variant = data.variant || 'standard';
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -3016,6 +3024,7 @@ class ChessGame {
       const startFen = result.starting_fen;
       const data = await this.api.newGame(startFen === 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' ? null : startFen);
       this.gameId = data.game_id;
+      this.variant = data.variant || 'standard';
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -3088,6 +3097,7 @@ class ChessGame {
           // Fallback: create new game if setPosition not available
           data = await this.api.newGame(fen);
           this.gameId = data.game_id;
+          this.variant = data.variant || 'standard';
         }
         this.fen = data.fen;
         this.pieces = data.pieces;
@@ -3167,6 +3177,7 @@ class ChessGame {
     try {
       const data = await this.api.newGame(fen);
       this.gameId = data.game_id;
+      this.variant = data.variant || 'standard';
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
@@ -4597,22 +4608,6 @@ class ChessGame {
       btn.classList.toggle('active', this._blindfoldMode);
     }
     this._updateStatus(this._blindfoldMode ? '🙈 Blindfold Mode — pieces hidden!' : 'Pieces visible');
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  //  VARIANT SELECTOR
-  // ══════════════════════════════════════════════════════════════
-
-  _initVariantSelector() {
-    const sel = document.getElementById('variant-select');
-    if (sel) {
-      sel.addEventListener('change', (e) => {
-        this._gameVariant = e.target.value;
-        if (this._gameVariant === 'chess960') {
-          this._chess960Id = null; // random
-        }
-      });
-    }
   }
 
   // ══════════════════════════════════════════════════════════════
