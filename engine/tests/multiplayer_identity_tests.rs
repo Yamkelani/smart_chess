@@ -225,3 +225,29 @@ async fn poll_reports_your_turn_only_to_the_seated_token() {
     assert_eq!(status, 200);
     assert_eq!(poll["your_turn"], false);
 }
+
+#[actix_web::test]
+async fn a_rematch_game_can_be_played() {
+    let app = app!();
+    let (_, host) = session();
+    let (_, guest) = session();
+    let room = seated_room!(app, &host, &guest);
+    let rematch = format!("/multiplayer/room/{room}/rematch");
+
+    assert_eq!(
+        post!(app, rematch, Some(&host), json!({})).1["status"],
+        "rematch_requested"
+    );
+    let (_, started) = post!(app, rematch, Some(&guest), json!({}));
+    assert_eq!(started["status"], "rematch_started");
+    // Colours swap, so the guest now plays white and moves first.
+    assert_eq!(started["host_color"], "black");
+
+    let (status, body) = post!(
+        app,
+        format!("/multiplayer/room/{room}/move"),
+        Some(&guest),
+        json!({"uci": "e2e4"})
+    );
+    assert_eq!(status, 200, "{body}");
+}
