@@ -20,7 +20,7 @@ import chess
 import httpx
 import numpy as np
 import torch
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -402,10 +402,14 @@ def _apply_style_bias(candidates: list, board: chess.Board, style: str) -> list:
 
 # ---- Engine Communication ----
 
-async def engine_new_game(fen: str | None = None) -> dict:
-    """Create a new game on the Rust engine."""
+def _auth_headers(authorization: str | None) -> dict:
+    """Forward the player's session token so the engine records them as owner."""
+    return {"Authorization": authorization} if authorization else {}
+
+async def engine_new_game(fen: str | None = None, authorization: str | None = None) -> dict:
+    """Create a new game on the Rust engine, owned by the calling player."""
     payload = {"fen": fen} if fen else {}
-    resp = await http_client.post("/game/new", json=payload)
+    resp = await http_client.post("/game/new", json=payload, headers=_auth_headers(authorization))
     resp.raise_for_status()
     return resp.json()
 
@@ -415,9 +419,11 @@ async def engine_get_game(game_id: str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
-async def engine_make_move(game_id: str, uci: str) -> dict:
-    """Make a move on the Rust engine."""
-    resp = await http_client.post(f"/game/{game_id}/move", json={"uci": uci})
+async def engine_make_move(game_id: str, uci: str, authorization: str | None = None) -> dict:
+    """Make a move on the Rust engine as the calling player."""
+    resp = await http_client.post(
+        f"/game/{game_id}/move", json={"uci": uci}, headers=_auth_headers(authorization)
+    )
     resp.raise_for_status()
     return resp.json()
 
@@ -529,14 +535,14 @@ async def ai_evaluate(req: EvalRequest):
 
 
 @app.post("/game/play", response_model=GamePlayResponse)
-async def start_game(req: GamePlayRequest):
+async def start_game(req: GamePlayRequest, authorization: str | None = Header(default=None)):
     """
     Start a new game against the AI.
     If player is black, AI makes the first move.
     Online learning is activated to track positions.
     """
     try:
-        engine_data = await engine_new_game()
+        engine_data = await engine_new_game(authorization=authorization)
         game_id = engine_data["game_id"]
         ai_move_uci = None
 
@@ -550,7 +556,7 @@ async def start_game(req: GamePlayRequest):
         if req.player_color == "black":
             sims = get_simulations(req.difficulty)
             result = await asyncio.to_thread(run_mcts, engine_data["fen"], sims, 0.5)
-            await engine_make_move(game_id, result["move"])
+            await engine_make_move(game_id, result["move"], authorization)
             ai_move_uci = result["move"]
 
             # Record AI's position + MCTS policy for learning
@@ -578,7 +584,9 @@ async def start_game(req: GamePlayRequest):
 
 
 @app.post("/game/{game_id}/play", response_model=GamePlayResponse)
-async def player_move(game_id: str, req: PlayerMoveRequest):
+async def player_move(
+    game_id: str, req: PlayerMoveRequest, authorization: str | None = Header(default=None)
+):
     """
     Make a player move, then get the AI response.
     Records all positions for online learning and trains when game ends.
@@ -590,7 +598,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
             online_learner.record_position(game_id, pre_game["fen"])
 
         # Make player's move on engine
-        move_data = await engine_make_move(game_id, req.uci)
+        move_data = await engine_make_move(game_id, req.uci, authorization)
         if not move_data.get("success"):
             raise HTTPException(status_code=400, detail="Invalid move")
 
@@ -626,7 +634,7 @@ async def player_move(game_id: str, req: PlayerMoveRequest):
                 mcts_policy=[(m.uci(), p) for m, p in result["action_probs"]]
             )
 
-        await engine_make_move(game_id, result["move"])
+        await engine_make_move(game_id, result["move"], authorization)
         game_data = await engine_get_game(game_id)
 
         # Check if game is over after AI move
