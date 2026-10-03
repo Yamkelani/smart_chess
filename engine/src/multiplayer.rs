@@ -347,10 +347,18 @@ pub async fn create_room(
         .unwrap_or("standard")
         .trim()
         .to_lowercase();
-    if crate::variants::GameVariant::from_str(&variant).is_none() {
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "Unknown variant"
-        }));
+    match crate::variants::GameVariant::from_str(&variant) {
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "Unknown variant"
+            }))
+        }
+        Some(v) if !v.is_playable() => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "Variant not available yet"
+            }))
+        }
+        Some(_) => {}
     }
     let host_name = sanitise_name(&body.player_name);
 

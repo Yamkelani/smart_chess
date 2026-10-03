@@ -41,6 +41,13 @@ impl GameVariant {
         }
     }
 
+    /// True once the engine enforces this variant's rules. A variant that is
+    /// not playable must not be offered or started: it would silently be
+    /// played as standard chess. Enable each one as its rules land.
+    pub fn is_playable(&self) -> bool {
+        matches!(self, GameVariant::Standard)
+    }
+
     // Public API shared with the Tauri build; kept as-is rather than moved to `FromStr`.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<GameVariant> {
@@ -192,8 +199,9 @@ pub struct VariantInfo {
     pub description: String,
 }
 
+/// The variants that can currently be played.
 pub fn list_variants() -> Vec<VariantInfo> {
-    vec![
+    let all = vec![
         VariantInfo {
             id: "standard".into(),
             name: "Standard".into(),
@@ -224,5 +232,8 @@ pub fn list_variants() -> Vec<VariantInfo> {
             name: "Crazyhouse".into(),
             description: GameVariant::Crazyhouse.description().into(),
         },
-    ]
+    ];
+    all.into_iter()
+        .filter(|v| GameVariant::from_str(&v.id).is_some_and(|g| g.is_playable()))
+        .collect()
 }

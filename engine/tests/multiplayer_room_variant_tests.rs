@@ -65,15 +65,25 @@ async fn unknown_variant_is_rejected() {
 }
 
 #[actix_web::test]
-async fn known_variants_are_accepted_and_normalised() {
-    let (status, body) = create_room(Some(" Chess960 ")).await;
+async fn playable_variant_is_accepted_and_normalised() {
+    let (status, body) = create_room(Some(" Standard ")).await;
     assert_eq!(status, 200);
-    assert_eq!(body["variant"], "chess960");
+    assert_eq!(body["variant"], "standard");
+}
 
-    for v in ["standard", "kingofthehill", "threecheck"] {
+#[actix_web::test]
+async fn variants_without_rules_yet_are_refused() {
+    // A room must not advertise a variant whose rules the engine does not play.
+    for v in [
+        "chess960",
+        "kingofthehill",
+        "threecheck",
+        "atomic",
+        "crazyhouse",
+    ] {
         let (status, body) = create_room(Some(v)).await;
-        assert_eq!(status, 200, "variant {v:?} should be accepted");
-        assert_eq!(body["variant"], v);
+        assert_eq!(status, 400, "variant {v:?} should be refused");
+        assert_eq!(body["error"], "Variant not available yet");
     }
 }
 

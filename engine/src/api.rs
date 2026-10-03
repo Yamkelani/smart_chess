@@ -832,6 +832,11 @@ pub async fn new_variant_game(
     let player_id = try_auth!(caller_id(&req, &config));
     let variant =
         variants::GameVariant::from_str(&body.variant).unwrap_or(variants::GameVariant::Standard);
+    if !variant.is_playable() {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "Variant not available yet".to_string(),
+        });
+    }
 
     let mut game = match variant {
         variants::GameVariant::Chess960 => {

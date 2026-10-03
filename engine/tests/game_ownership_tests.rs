@@ -98,7 +98,7 @@ async fn creating_a_game_requires_a_valid_token() {
             app,
             "/game/new-variant",
             Some(&owner),
-            json!({"variant": "chess960"})
+            json!({"variant": "standard"})
         ),
         200
     );

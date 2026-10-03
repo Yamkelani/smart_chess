@@ -120,10 +120,6 @@ class ChessGame {
     this.multiplayer = new MultiplayerManager();
     this._multiplayerActive = false;
 
-    // Variant
-    this._gameVariant = 'standard';
-    this._chess960Id = null;
-
     // Blindfold mode
     this._blindfoldMode = false;
 
@@ -162,7 +158,6 @@ class ChessGame {
     this._initTimedDrills();
     this._initPositionEditor();
     this._initBlindfoldMode();
-    this._initVariantSelector();
     this._initCosmeticsPanel();
     this._initLeaderboard();
     this._initMonitoring();
@@ -4087,15 +4082,6 @@ class ChessGame {
             <button class="btn" id="mp-join-go" style="width:80px">Join</button>
           </div>
         </div>
-        <div style="margin-bottom:12px">
-          <label style="font-size:0.8rem;color:var(--text-secondary)">Variant</label>
-          <select id="mp-variant" style="margin-top:4px">
-            <option value="standard">Standard</option>
-            <option value="chess960">Chess960</option>
-            <option value="kingofthehill">King of the Hill</option>
-            <option value="threecheck">Three-Check</option>
-          </select>
-        </div>
         <div id="mp-lobby-list" style="margin-top:16px">
           <h4 style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px">OPEN ROOMS</h4>
           <div id="mp-rooms" style="max-height:200px;overflow-y:auto"></div>
@@ -4109,9 +4095,8 @@ class ChessGame {
       this.multiplayer.setPlayerName(e.target.value.trim() || 'Player');
     });
     document.getElementById('mp-create').addEventListener('click', async () => {
-      const variant = document.getElementById('mp-variant').value;
       try {
-        await this.multiplayer.createRoom({ variant, color: this.playerColor });
+        await this.multiplayer.createRoom({ color: this.playerColor });
       } catch (e) { console.warn('Create room failed:', e); }
     });
     document.getElementById('mp-join-btn').addEventListener('click', () => {
@@ -4597,22 +4582,6 @@ class ChessGame {
       btn.classList.toggle('active', this._blindfoldMode);
     }
     this._updateStatus(this._blindfoldMode ? '🙈 Blindfold Mode — pieces hidden!' : 'Pieces visible');
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  //  VARIANT SELECTOR
-  // ══════════════════════════════════════════════════════════════
-
-  _initVariantSelector() {
-    const sel = document.getElementById('variant-select');
-    if (sel) {
-      sel.addEventListener('change', (e) => {
-        this._gameVariant = e.target.value;
-        if (this._gameVariant === 'chess960') {
-          this._chess960Id = null; // random
-        }
-      });
-    }
   }
 
   // ══════════════════════════════════════════════════════════════
