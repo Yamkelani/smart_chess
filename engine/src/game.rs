@@ -1,5 +1,7 @@
 use crate::board::Board;
+use crate::chess960;
 use crate::moves::{generate_legal_moves, make_move, Move};
+use crate::variants::GameVariant;
 use crate::zobrist::hash_board;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -59,6 +61,10 @@ pub struct GameState {
     /// change it. None for games saved before ownership, which are read-only.
     #[serde(default)]
     pub owner: Option<String>,
+    /// Which rules this game is played under. Games saved before variants
+    /// existed load as standard.
+    #[serde(default)]
+    pub variant: GameVariant,
 }
 
 impl Default for GameState {
@@ -83,7 +89,24 @@ impl GameState {
             hash_history: vec![initial_hash],
             is_analysis: false,
             owner: None,
+            variant: GameVariant::Standard,
         }
+    }
+
+    /// Start a game of `variant`. Chess960 starts from position `chess960_id`
+    /// (0-959), or a random one when None; every other variant starts from the
+    /// standard position.
+    pub fn new_variant(variant: GameVariant, chess960_id: Option<u16>) -> Self {
+        let mut game = match variant {
+            GameVariant::Chess960 => {
+                let pos =
+                    chess960_id.map_or_else(chess960::random_position, chess960::generate_position);
+                Self::from_fen(&pos.fen).expect("generated Chess960 positions are valid FEN")
+            }
+            _ => Self::new(),
+        };
+        game.variant = variant;
+        game
     }
 
     pub fn from_fen(fen: &str) -> Result<Self, String> {
@@ -101,6 +124,7 @@ impl GameState {
             hash_history: vec![initial_hash],
             is_analysis: false,
             owner: None,
+            variant: GameVariant::Standard,
         })
     }
 

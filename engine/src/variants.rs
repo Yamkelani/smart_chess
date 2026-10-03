@@ -30,6 +30,18 @@ impl GameVariant {
         }
     }
 
+    /// Identifier used at API boundaries; `from_str` accepts it back.
+    pub fn id(&self) -> &'static str {
+        match self {
+            GameVariant::Standard => "standard",
+            GameVariant::Chess960 => "chess960",
+            GameVariant::KingOfTheHill => "kingofthehill",
+            GameVariant::ThreeCheck => "threecheck",
+            GameVariant::Atomic => "atomic",
+            GameVariant::Crazyhouse => "crazyhouse",
+        }
+    }
+
     pub fn description(&self) -> &str {
         match self {
             GameVariant::Standard => "Classic chess with standard rules.",

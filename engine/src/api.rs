@@ -174,6 +174,8 @@ pub struct EvalRequest {
 #[derive(Serialize)]
 pub struct NewGameResponse {
     pub game_id: String,
+    /// Variant id, e.g. "standard" or "kingofthehill".
+    pub variant: String,
     pub fen: String,
     pub pieces: Vec<crate::board::PieceInfo>,
     pub legal_moves: Vec<String>,
@@ -182,6 +184,8 @@ pub struct NewGameResponse {
 #[derive(Serialize)]
 pub struct GameStateResponse {
     pub game_id: String,
+    /// Variant id, e.g. "standard" or "kingofthehill".
+    pub variant: String,
     pub fen: String,
     pub side_to_move: String,
     pub pieces: Vec<crate::board::PieceInfo>,
@@ -364,6 +368,7 @@ pub async fn new_game(
 
     let response = NewGameResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         pieces: game.board.to_piece_list(),
         legal_moves: game.get_legal_moves(),
@@ -420,6 +425,7 @@ pub async fn set_position(
     }
     HttpResponse::Ok().json(GameStateResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         side_to_move: format!("{}", game.board.side_to_move),
         pieces: game.board.to_piece_list(),
@@ -476,6 +482,7 @@ pub async fn undo_moves(
 
     HttpResponse::Ok().json(GameStateResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         side_to_move: format!("{}", game.board.side_to_move),
         pieces: game.board.to_piece_list(),
@@ -499,6 +506,7 @@ pub async fn get_game(data: web::Data<AppState>, path: web::Path<String>) -> imp
         Some(game) => {
             let response = GameStateResponse {
                 game_id: game.id.clone(),
+                variant: game.variant.id().to_string(),
                 fen: game.board.to_fen(),
                 side_to_move: format!("{}", game.board.side_to_move),
                 pieces: game.board.to_piece_list(),
@@ -830,36 +838,37 @@ pub async fn new_variant_game(
     body: web::Json<NewVariantGameRequest>,
 ) -> impl Responder {
     let player_id = try_auth!(caller_id(&req, &config));
-    let variant =
-        variants::GameVariant::from_str(&body.variant).unwrap_or(variants::GameVariant::Standard);
+    let variant = match variants::GameVariant::from_str(&body.variant) {
+        Some(v) => v,
+        None => {
+            return HttpResponse::BadRequest().json(ErrorResponse {
+                error: "Unknown variant".to_string(),
+            })
+        }
+    };
 
-    let mut game = match variant {
-        variants::GameVariant::Chess960 => {
-            let pos = if let Some(id) = body.chess960_id {
-                chess960::generate_position(id)
-            } else {
-                chess960::random_position()
-            };
-            match GameState::from_fen(&pos.fen) {
-                Ok(g) => g,
+    // A custom start position is honoured for every variant except Chess960,
+    // whose start is always one of the 960 generated positions.
+    let mut game = match (&body.fen, variant) {
+        (Some(fen), v) if v != variants::GameVariant::Chess960 => {
+            if let Err(e) = validate_fen(fen) {
+                return HttpResponse::BadRequest().json(ErrorResponse { error: e });
+            }
+            match GameState::from_fen(fen) {
+                Ok(mut g) => {
+                    g.variant = v;
+                    g
+                }
                 Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
             }
         }
-        _ => {
-            if let Some(ref fen) = body.fen {
-                match GameState::from_fen(fen) {
-                    Ok(g) => g,
-                    Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
-                }
-            } else {
-                GameState::new()
-            }
-        }
+        _ => GameState::new_variant(variant, body.chess960_id),
     };
     game.owner = Some(player_id);
 
     let response = NewGameResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         pieces: game.board.to_piece_list(),
         legal_moves: game.get_legal_moves(),
@@ -924,6 +933,7 @@ pub async fn resign_game(
     };
     HttpResponse::Ok().json(GameStateResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         side_to_move: stm.to_string(),
         pieces: game.board.to_piece_list(),
@@ -968,6 +978,7 @@ pub async fn draw_game(
     };
     HttpResponse::Ok().json(GameStateResponse {
         game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
         fen: game.board.to_fen(),
         side_to_move: stm.to_string(),
         pieces: game.board.to_piece_list(),
