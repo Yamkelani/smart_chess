@@ -12,6 +12,9 @@ services:
     environment:
       - ENGINE_PORT=8081
       - RUST_LOG=info
+      # Signs guest session tokens. Set a random value of 32+ characters in
+      # production (e.g. in .env); unset, tokens reset on every restart.
+      - SESSION_SECRET=${SESSION_SECRET:-}
     volumes:
       - engine-data:/app/data
     healthcheck:

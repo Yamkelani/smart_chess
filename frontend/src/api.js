@@ -5,7 +5,7 @@
  *   - Browser/Docker: HTTP fetch via nginx proxy
  *   - Tauri (native app): Engine calls via invoke(), AI calls via configured cloud URL
  */
-import { isTauri, invoke, getAiBaseUrl, getEngineBaseUrl } from './bridge.js';
+import { isTauri, invoke, getAiBaseUrl, getEngineBaseUrl, apiFetch } from './bridge.js';
 
 function getEngineBase() { return getEngineBaseUrl(); }
 function getAiBase() { return getAiBaseUrl(); }
@@ -19,7 +19,7 @@ export class ChessAPI {
       return invoke('new_game', { fen: fen || null });
     }
     const body = fen ? { fen } : {};
-    const resp = await fetch(`${getEngineBase()}/game/new`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/new`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -32,7 +32,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('get_game', { gameId });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}`);
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
@@ -41,7 +41,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('make_move', { gameId, uci });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/move`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uci }),
@@ -54,7 +54,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('get_legal_moves', { gameId });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/moves`);
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}/moves`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
@@ -63,7 +63,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('engine_move', { gameId, depth });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/engine-move?depth=${depth}`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}/engine-move?depth=${depth}`, {
       method: 'POST',
     });
     if (!resp.ok) throw new Error(await resp.text());
@@ -77,7 +77,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('resign_game', { gameId, color });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/resign`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}/resign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ color }),
@@ -93,7 +93,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('draw_game', { gameId });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/draw`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}/draw`, {
       method: 'POST',
     });
     if (!resp.ok) throw new Error(await resp.text());
@@ -111,7 +111,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('set_position', { gameId, fen });
     }
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/set-position`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}/set-position`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen }),
@@ -126,7 +126,7 @@ export class ChessAPI {
    * further back than the moves actually played.
    */
   async undoMoves(gameId, moves = 1) {
-    const resp = await fetch(`${getEngineBase()}/game/${gameId}/undo`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/${gameId}/undo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ moves }),
@@ -160,7 +160,7 @@ export class ChessAPI {
 
     for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
       try {
-        const resp = await fetch(`${aiBase}/ai/move`, {
+        const resp = await apiFetch(`${aiBase}/ai/move`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -193,7 +193,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/game-complete`, {
+      const resp = await apiFetch(`${aiBase}/ai/game-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `winner` is the structured outcome ('white' | 'black' | null for a
@@ -222,7 +222,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('evaluate_position', { fen, depth });
     }
-    const resp = await fetch(`${getEngineBase()}/evaluate`, {
+    const resp = await apiFetch(`${getEngineBase()}/evaluate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen, depth }),
@@ -244,7 +244,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('analyze_position', { fen, depth, numMoves });
     }
-    const resp = await fetch(`${getEngineBase()}/analyze`, {
+    const resp = await apiFetch(`${getEngineBase()}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen, depth, num_moves: numMoves }),
@@ -264,7 +264,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('get_attack_map', { fen });
     }
-    const resp = await fetch(`${getEngineBase()}/attack-map`, {
+    const resp = await apiFetch(`${getEngineBase()}/attack-map`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fen }),
@@ -277,7 +277,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/learning`);
+      const resp = await apiFetch(`${aiBase}/ai/learning`);
       if (resp.ok) return resp.json();
     } catch (e) { /* Service unavailable */ }
     return null;
@@ -291,7 +291,7 @@ export class ChessAPI {
     try {
       const body = { question };
       if (fen) body.fen = fen;
-      const resp = await fetch(`${aiBase}/ai/tutor/ask`, {
+      const resp = await apiFetch(`${aiBase}/ai/tutor/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -307,7 +307,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/tutor/lessons`);
+      const resp = await apiFetch(`${aiBase}/ai/tutor/lessons`);
       if (resp.ok) return resp.json();
     } catch (e) {
       console.warn('Tutor lessons unavailable');
@@ -319,7 +319,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/tutor/lesson/${lessonId}`);
+      const resp = await apiFetch(`${aiBase}/ai/tutor/lesson/${lessonId}`);
       if (resp.ok) return resp.json();
     } catch (e) {
       console.warn('Lesson detail unavailable');
@@ -335,7 +335,7 @@ export class ChessAPI {
     try {
       const body = { min_rating: minRating, max_rating: maxRating, limit };
       if (theme) body.theme = theme;
-      const resp = await fetch(`${aiBase}/ai/puzzles`, {
+      const resp = await apiFetch(`${aiBase}/ai/puzzles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -351,7 +351,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/puzzles/check`, {
+      const resp = await apiFetch(`${aiBase}/ai/puzzles/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ puzzle_id: puzzleId, move_index: moveIndex, move }),
@@ -369,7 +369,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (aiBase) {
       try {
-        const resp = await fetch(`${aiBase}/ai/review`, {
+        const resp = await apiFetch(`${aiBase}/ai/review`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ fens, moves }),
@@ -452,7 +452,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/personalities`);
+      const resp = await apiFetch(`${aiBase}/ai/personalities`);
       if (resp.ok) return resp.json();
     } catch (e) {
       console.warn('Personalities unavailable');
@@ -466,7 +466,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/drills/categories`);
+      const resp = await apiFetch(`${aiBase}/ai/drills/categories`);
       if (resp.ok) return resp.json();
     } catch (e) {
       console.warn('Drill categories unavailable');
@@ -478,7 +478,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/drills/category/${encodeURIComponent(categoryId)}`);
+      const resp = await apiFetch(`${aiBase}/ai/drills/category/${encodeURIComponent(categoryId)}`);
       if (resp.ok) return resp.json();
     } catch (e) {
       console.warn('Drills unavailable');
@@ -490,7 +490,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/drills/${encodeURIComponent(drillId)}`);
+      const resp = await apiFetch(`${aiBase}/ai/drills/${encodeURIComponent(drillId)}`);
       if (resp.ok) return resp.json();
     } catch (e) {}
     return null;
@@ -500,7 +500,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/drills/${encodeURIComponent(drillId)}/hint`);
+      const resp = await apiFetch(`${aiBase}/ai/drills/${encodeURIComponent(drillId)}/hint`);
       if (resp.ok) return resp.json();
     } catch (e) {}
     return null;
@@ -510,7 +510,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/pgn/import`, {
+      const resp = await apiFetch(`${aiBase}/ai/pgn/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pgn: pgnText }),
@@ -527,7 +527,7 @@ export class ChessAPI {
     const aiBase = getAiBase();
     if (!aiBase) return null;
     try {
-      const resp = await fetch(`${aiBase}/ai/drills/check`, {
+      const resp = await apiFetch(`${aiBase}/ai/drills/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ drill_id: drillId, move_index: moveIndex, move }),
@@ -545,7 +545,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('chess960_random', {});
     }
-    const resp = await fetch(`${getEngineBase()}/chess960/random`);
+    const resp = await apiFetch(`${getEngineBase()}/chess960/random`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
@@ -554,7 +554,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('chess960_position', { id });
     }
-    const resp = await fetch(`${getEngineBase()}/chess960/${id}`);
+    const resp = await apiFetch(`${getEngineBase()}/chess960/${id}`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
@@ -565,7 +565,7 @@ export class ChessAPI {
     if (isTauri()) {
       return invoke('list_variants', {});
     }
-    const resp = await fetch(`${getEngineBase()}/variants`);
+    const resp = await apiFetch(`${getEngineBase()}/variants`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
@@ -576,7 +576,7 @@ export class ChessAPI {
     }
     const body = { variant };
     if (fen) body.fen = fen;
-    const resp = await fetch(`${getEngineBase()}/game/new-variant`, {
+    const resp = await apiFetch(`${getEngineBase()}/game/new-variant`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -588,7 +588,7 @@ export class ChessAPI {
   // ── Multiplayer ──
 
   async mpCreateRoom(options = {}) {
-    const resp = await fetch(`${getEngineBase()}/multiplayer/room/create`, {
+    const resp = await apiFetch(`${getEngineBase()}/multiplayer/room/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options),
@@ -598,7 +598,7 @@ export class ChessAPI {
   }
 
   async mpJoinRoom(code, playerName) {
-    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/join`, {
+    const resp = await apiFetch(`${getEngineBase()}/multiplayer/room/${code}/join`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ player_name: playerName }),
@@ -608,13 +608,13 @@ export class ChessAPI {
   }
 
   async mpGetRoom(code) {
-    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}`);
+    const resp = await apiFetch(`${getEngineBase()}/multiplayer/room/${code}`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
 
   async mpMakeMove(code, playerId, uci) {
-    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/move`, {
+    const resp = await apiFetch(`${getEngineBase()}/multiplayer/room/${code}/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ player_id: playerId, uci }),
@@ -624,7 +624,7 @@ export class ChessAPI {
   }
 
   async mpChat(code, playerId, content) {
-    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/chat`, {
+    const resp = await apiFetch(`${getEngineBase()}/multiplayer/room/${code}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sender_id: playerId, content }),
@@ -634,13 +634,13 @@ export class ChessAPI {
   }
 
   async mpListRooms() {
-    const resp = await fetch(`${getEngineBase()}/multiplayer/room/list`);
+    const resp = await apiFetch(`${getEngineBase()}/multiplayer/room/list`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
 
   async mpLeaveRoom(code, playerId) {
-    const resp = await fetch(`${getEngineBase()}/multiplayer/room/${code}/leave`, {
+    const resp = await apiFetch(`${getEngineBase()}/multiplayer/room/${code}/leave`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ player_id: playerId }),
@@ -650,7 +650,7 @@ export class ChessAPI {
   }
 
   async getLeaderboard() {
-    const resp = await fetch(`${getEngineBase()}/leaderboard`);
+    const resp = await apiFetch(`${getEngineBase()}/leaderboard`);
     if (!resp.ok) throw new Error(await resp.text());
     return resp.json();
   }
