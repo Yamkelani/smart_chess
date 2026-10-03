@@ -67,6 +67,7 @@ export class MultiplayerManager {
     this.roomCode = data.room_code;
     this.isHost = true;
     this.myColor = data.host_color;
+    this.variant = data.variant;
     this.connected = true;
     this._startPolling();
     this._emit('room-created', data);
@@ -91,6 +92,7 @@ export class MultiplayerManager {
     this.roomCode = data.room_code;
     this.isHost = false;
     this.myColor = data.host_color === 'white' ? 'black' : 'white';
+    this.variant = data.variant;
     this.gameId = data.game_id;
     this.connected = true;
     this._startPolling();

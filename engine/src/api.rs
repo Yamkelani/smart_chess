@@ -6,8 +6,10 @@ use std::sync::Mutex;
 use crate::attacks;
 use crate::board::Board;
 use crate::chess960;
-use crate::evaluation::{evaluate, search_best_move_timed, search_top_moves_timed};
-use crate::game::{GameState, GameStatus};
+use crate::evaluation::{
+    evaluate, search_best_move_timed, search_best_move_with_rules, search_top_moves_timed,
+};
+use crate::game::{CheckCount, GameState, GameStatus};
 use crate::moves::generate_legal_moves;
 use crate::persistence;
 use crate::session::SessionConfig;
@@ -200,6 +202,9 @@ pub struct GameStateResponse {
     pub winner: Option<String>,
     pub move_history: Vec<String>,
     pub is_check: bool,
+    /// Three-Check only: checks each side has given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<CheckCount>,
 }
 
 #[derive(Serialize)]
@@ -217,6 +222,9 @@ pub struct MoveResponse {
     pub winner: Option<String>,
     /// True if an arbitrary position was loaded, so the result is unranked.
     pub is_analysis: bool,
+    /// Three-Check only: checks each side has given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<CheckCount>,
 }
 
 #[derive(Serialize)]
@@ -432,6 +440,7 @@ pub async fn set_position(
         legal_moves: game.get_legal_moves(),
         status: format!("{:?}", game.status),
         winner: game.status.winner().map(str::to_string),
+        checks: game.check_count(),
         is_analysis: game.is_analysis,
         move_history: game.move_history.clone(),
         is_check: game.board.is_in_check(),
@@ -489,6 +498,7 @@ pub async fn undo_moves(
         legal_moves: game.get_legal_moves(),
         status: format!("{:?}", game.status),
         winner: game.status.winner().map(str::to_string),
+        checks: game.check_count(),
         is_analysis: game.is_analysis,
         move_history: game.move_history.clone(),
         is_check: game.board.is_in_check(),
@@ -513,6 +523,7 @@ pub async fn get_game(data: web::Data<AppState>, path: web::Path<String>) -> imp
                 legal_moves: game.get_legal_moves(),
                 status: format!("{:?}", game.status),
                 winner: game.status.winner().map(str::to_string),
+                checks: game.check_count(),
                 is_analysis: game.is_analysis,
                 move_history: game.move_history.clone(),
                 is_check: game.board.is_in_check(),
@@ -555,6 +566,7 @@ pub async fn make_move(
                     is_check: result.is_check,
                     status: format!("{:?}", game.status),
                     winner: game.status.winner().map(str::to_string),
+                    checks: game.check_count(),
                     is_analysis: game.is_analysis,
                 };
                 HttpResponse::Ok().json(response)
@@ -633,13 +645,20 @@ pub async fn engine_move(
     // Phase 1: take a snapshot of the position under the lock, then release it.
     // The search must not hold the global games lock — it can run for seconds,
     // and every other game's moves would block behind it.
-    let (search_board, fen_before, status_before) = {
+    let (search_board, rules, fen_before, status_before) = {
         let mut games = lock_games!(data);
         ensure_game_loaded(&mut games, &game_id);
         try_auth!(authorize_owner(&games, &game_id, &player_id));
         match games.get(&game_id) {
+            // A variant win can end the game while moves remain on the board.
+            Some(game) if game.status.is_terminal() => {
+                return HttpResponse::BadRequest().json(ErrorResponse {
+                    error: "Game is over".to_string(),
+                })
+            }
             Some(game) => (
                 game.board.clone(),
+                game.search_rules(),
                 game.board.to_fen(),
                 format!("{:?}", game.status),
             ),
@@ -652,16 +671,18 @@ pub async fn engine_move(
     };
 
     // Phase 2: search off the async worker, with no lock held.
-    let best = match web::block(move || search_best_move_timed(&search_board, depth, budget)).await
-    {
-        Ok(b) => b,
-        Err(e) => {
-            log::error!("engine_move: search task failed: {}", e);
-            return HttpResponse::InternalServerError().json(ErrorResponse {
-                error: "Search failed".to_string(),
-            });
-        }
-    };
+    let best =
+        match web::block(move || search_best_move_with_rules(&search_board, rules, depth, budget))
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("engine_move: search task failed: {}", e);
+                return HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "Search failed".to_string(),
+                });
+            }
+        };
 
     let (best_move, _score) = match best {
         Some(b) => b,
@@ -708,6 +729,7 @@ pub async fn engine_move(
                 is_check: result.is_check,
                 status: format!("{:?}", game.status),
                 winner: game.status.winner().map(str::to_string),
+                checks: game.check_count(),
                 is_analysis: game.is_analysis,
             };
             HttpResponse::Ok().json(response)
@@ -939,6 +961,7 @@ pub async fn resign_game(
         pieces: game.board.to_piece_list(),
         status: format!("{:?}", game.status),
         winner: game.status.winner().map(str::to_string),
+        checks: game.check_count(),
         is_analysis: game.is_analysis,
         legal_moves: vec![],
         move_history: game.move_history.clone(),
@@ -984,6 +1007,7 @@ pub async fn draw_game(
         pieces: game.board.to_piece_list(),
         status: format!("{:?}", game.status),
         winner: game.status.winner().map(str::to_string),
+        checks: game.check_count(),
         is_analysis: game.is_analysis,
         legal_moves: vec![],
         move_history: game.move_history.clone(),

@@ -1,6 +1,8 @@
 use chess_engine::attacks;
 use chess_engine::board::Board;
-use chess_engine::evaluation::{evaluate, search_best_move_timed, search_top_moves_timed};
+use chess_engine::evaluation::{
+    evaluate, search_best_move_timed, search_best_move_with_rules, search_top_moves_timed,
+};
 
 /// Wall-clock budget for an embedded search, in milliseconds.
 ///
@@ -10,7 +12,7 @@ const SEARCH_TIME_LIMIT_MS: u64 = 3000;
 
 /// Hard ceiling on a caller-supplied search depth.
 const MAX_SEARCH_DEPTH: u8 = 12;
-use chess_engine::game::GameState;
+use chess_engine::game::{CheckCount, GameState};
 use chess_engine::moves::generate_legal_moves;
 use chess_engine::variants::GameVariant;
 use serde::{Deserialize, Serialize};
@@ -47,6 +49,11 @@ pub struct GameStateResponse {
     pub status: String,
     pub move_history: Vec<String>,
     pub is_check: bool,
+    /// Winning colour, or null for an unfinished or drawn game.
+    pub winner: Option<String>,
+    /// Three-Check only: checks each side has given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<CheckCount>,
 }
 
 #[derive(Serialize)]
@@ -59,6 +66,11 @@ pub struct MoveResponse {
     pub captured: Option<String>,
     pub is_check: bool,
     pub status: String,
+    /// Winning colour, or null for an unfinished or drawn game.
+    pub winner: Option<String>,
+    /// Three-Check only: checks each side has given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<CheckCount>,
 }
 
 #[derive(Serialize)]
@@ -153,6 +165,8 @@ pub fn get_game(state: State<'_, EngineState>, game_id: String) -> Result<GameSt
         status: format!("{:?}", game.status),
         move_history: game.move_history.clone(),
         is_check: game.board.is_in_check(),
+        winner: game.status.winner().map(str::to_string),
+        checks: game.check_count(),
     })
 }
 
@@ -171,6 +185,8 @@ pub fn make_move(state: State<'_, EngineState>, game_id: String, uci: String) ->
         captured: result.captured,
         is_check: result.is_check,
         status: format!("{:?}", game.status),
+        winner: game.status.winner().map(str::to_string),
+        checks: game.check_count(),
     })
 }
 
@@ -186,8 +202,12 @@ pub fn engine_move(state: State<'_, EngineState>, game_id: String) -> Result<Mov
     let mut games = state.games.lock().map_err(|e| e.to_string())?;
     let game = games.get_mut(&game_id).ok_or("Game not found")?;
 
+    // A variant win can end the game while moves remain on the board.
+    if game.status.is_terminal() {
+        return Err("Game is over".to_string());
+    }
     let depth = 4;
-    match search_best_move_timed(&game.board, depth, SEARCH_TIME_LIMIT_MS) {
+    match search_best_move_with_rules(&game.board, game.search_rules(), depth, SEARCH_TIME_LIMIT_MS) {
         Some((best_move, _score)) => {
             let uci = best_move.to_uci();
             let result = game.make_move(&uci)?;
@@ -200,6 +220,8 @@ pub fn engine_move(state: State<'_, EngineState>, game_id: String) -> Result<Mov
                 captured: result.captured,
                 is_check: result.is_check,
                 status: format!("{:?}", game.status),
+                winner: game.status.winner().map(str::to_string),
+                checks: game.check_count(),
             })
         }
         None => Err("No moves available".to_string()),

@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+use crate::board::Board;
+use crate::piece::Color;
+
+/// The centre squares a king must reach to win King of the Hill: d4, e4, d5, e5.
+pub const HILL_SQUARES: [u8; 4] = [27, 28, 35, 36];
+
+/// Checks a side must give to win Three-Check.
+pub const CHECKS_TO_WIN: u8 = 3;
+
 /// Supported chess game variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GameVariant {
@@ -27,6 +36,32 @@ impl GameVariant {
             GameVariant::ThreeCheck => "Three-Check",
             GameVariant::Atomic => "Atomic",
             GameVariant::Crazyhouse => "Crazyhouse",
+        }
+    }
+
+    /// The side that has won by this variant's own rule (not checkmate), if any.
+    /// `checks_given` is indexed [white, black].
+    pub fn winner_by_rule(&self, board: &Board, checks_given: [u8; 2]) -> Option<Color> {
+        match self {
+            GameVariant::KingOfTheHill => {
+                if HILL_SQUARES.contains(&board.white_king_sq) {
+                    Some(Color::White)
+                } else if HILL_SQUARES.contains(&board.black_king_sq) {
+                    Some(Color::Black)
+                } else {
+                    None
+                }
+            }
+            GameVariant::ThreeCheck => {
+                if checks_given[0] >= CHECKS_TO_WIN {
+                    Some(Color::White)
+                } else if checks_given[1] >= CHECKS_TO_WIN {
+                    Some(Color::Black)
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 

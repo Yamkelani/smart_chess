@@ -212,6 +212,9 @@ pub struct PollResponse {
     pub your_turn: bool,
     pub rematch_requested_by: Option<String>,
     pub opponent_connected: bool,
+    /// Three-Check only: checks each side has given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<crate::game::CheckCount>,
 }
 
 // ── Utility ──
@@ -543,6 +546,11 @@ pub async fn room_poll(
         } else {
             (None, None, None, None, false, None, Vec::new())
         };
+    let checks = room
+        .game_id
+        .as_ref()
+        .and_then(|id| games.get(id))
+        .and_then(|game| game.check_count());
 
     // Determine if it's this player's turn
     let my_color = player_id.as_deref().and_then(|p| room.color_of(p));
@@ -574,6 +582,7 @@ pub async fn room_poll(
         your_turn,
         rematch_requested_by: room.rematch_requested_by.clone(),
         opponent_connected,
+        checks,
     })
 }
 
@@ -664,6 +673,7 @@ pub async fn room_move(
                 "captured": result.captured,
                 "is_check": result.is_check,
                 "status": format!("{:?}", game.status),
+                "checks": game.check_count(),
             }))
         }
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
