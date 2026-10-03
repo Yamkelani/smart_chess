@@ -5,9 +5,26 @@
 use actix_web::{test, web, App};
 use chess_engine::api::AppState;
 use chess_engine::multiplayer::{configure_multiplayer_routes, MultiplayerState};
+use chess_engine::session::SessionConfig;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Mutex;
+
+fn config() -> SessionConfig {
+    SessionConfig::new(b"test-secret-that-is-at-least-32-bytes!!".to_vec(), 86_400).unwrap()
+}
+
+/// `Authorization` header for a fresh guest session.
+fn auth() -> (&'static str, String) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    (
+        "Authorization",
+        format!("Bearer {}", config().issue(now).token),
+    )
+}
 
 async fn create_room(variant: Option<&str>) -> (u16, Value) {
     create_room_named("Host", variant).await
@@ -20,15 +37,17 @@ async fn create_room_named(name: &str, variant: Option<&str>) -> (u16, Value) {
                 games: Mutex::new(HashMap::new()),
             }))
             .app_data(web::Data::new(MultiplayerState::new()))
+            .app_data(web::Data::new(config()))
             .configure(configure_multiplayer_routes),
     )
     .await;
-    let mut body = json!({ "player_id": "p1", "player_name": name });
+    let mut body = json!({ "player_name": name });
     if let Some(v) = variant {
         body["variant"] = json!(v);
     }
     let req = test::TestRequest::post()
         .uri("/multiplayer/room/create")
+        .insert_header(auth())
         .set_json(body)
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -89,20 +108,22 @@ async fn guest_name_is_capped_and_cleaned_on_join() {
                 games: Mutex::new(HashMap::new()),
             }))
             .app_data(web::Data::new(MultiplayerState::new()))
+            .app_data(web::Data::new(config()))
             .configure(configure_multiplayer_routes),
     )
     .await;
     let req = test::TestRequest::post()
         .uri("/multiplayer/room/create")
-        .set_json(json!({ "player_id": "host", "player_name": "Host" }))
+        .insert_header(auth())
+        .set_json(json!({ "player_name": "Host" }))
         .to_request();
     let created: Value = test::call_and_read_body_json(&app, req).await;
 
     let long_name = format!("\u{1b}[31m{}", "g".repeat(100));
     let req = test::TestRequest::post()
         .uri("/multiplayer/room/join")
+        .insert_header(auth())
         .set_json(json!({
-            "player_id": "guest",
             "player_name": long_name,
             "room_code": created["room_code"],
         }))

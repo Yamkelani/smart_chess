@@ -112,6 +112,7 @@ macro_rules! try_auth {
         }
     };
 }
+pub(crate) use try_auth;
 
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
@@ -121,7 +122,7 @@ fn unix_now() -> u64 {
 }
 
 /// The player id behind the request's `Authorization: Bearer` session token.
-fn caller_id(req: &HttpRequest, config: &SessionConfig) -> Result<String, HttpResponse> {
+pub(crate) fn caller_id(req: &HttpRequest, config: &SessionConfig) -> Result<String, HttpResponse> {
     req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())

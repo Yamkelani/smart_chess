@@ -1,10 +1,12 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use uuid::Uuid;
 
+use crate::api::{caller_id, try_auth};
 use crate::game::{GameState, GameStatus};
+use crate::session::SessionConfig;
 
 // ── Multiplayer Room System ──
 // Since we're using a REST architecture (no WebSocket dependency needed),
@@ -125,10 +127,11 @@ pub struct LeaderboardEntry {
 }
 
 // ── Request/Response Types ──
+// Player identity is never read from these bodies: it comes from the
+// request's session token (see `crate::api::caller_id`).
 
 #[derive(Deserialize)]
 pub struct CreateRoomRequest {
-    pub player_id: String,
     pub player_name: String,
     pub host_color: Option<String>,
     pub variant: Option<String>,
@@ -137,34 +140,29 @@ pub struct CreateRoomRequest {
 
 #[derive(Deserialize)]
 pub struct JoinRoomRequest {
-    pub player_id: String,
     pub player_name: String,
     pub room_code: String,
 }
 
 #[derive(Deserialize)]
 pub struct SpectateRequest {
-    pub spectator_id: String,
     pub spectator_name: String,
 }
 
 #[derive(Deserialize)]
 pub struct SendChatRequest {
-    pub sender_id: String,
     pub sender_name: String,
     pub content: ChatContent,
 }
 
 #[derive(Deserialize)]
 pub struct PollRequest {
-    pub player_id: String,
     pub last_move_count: Option<usize>,
     pub last_chat_count: Option<usize>,
 }
 
 #[derive(Deserialize)]
 pub struct RoomMoveRequest {
-    pub player_id: String,
     pub uci: String,
 }
 
@@ -292,10 +290,13 @@ fn generate_room_code() -> String {
 // ── API Handlers ──
 
 pub async fn create_room(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     _game_state: web::Data<crate::api::AppState>,
     body: web::Json<CreateRoomRequest>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let room_id = Uuid::new_v4().to_string();
     let room_code = generate_room_code();
     let now = now_epoch();
@@ -318,7 +319,7 @@ pub async fn create_room(
         room_id: room_id.clone(),
         room_code: room_code.clone(),
         game_id: None,
-        host_id: body.player_id.clone(),
+        host_id: player_id.clone(),
         guest_id: None,
         host_name: host_name.clone(),
         guest_name: None,
@@ -338,7 +339,7 @@ pub async fn create_room(
         .player_rooms
         .lock()
         .unwrap()
-        .insert(body.player_id.clone(), room_id.clone());
+        .insert(player_id, room_id.clone());
 
     HttpResponse::Ok().json(RoomResponse {
         room_id,
@@ -354,10 +355,13 @@ pub async fn create_room(
 }
 
 pub async fn join_room(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     game_state: web::Data<crate::api::AppState>,
     body: web::Json<JoinRoomRequest>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let mut rooms = mp_state.rooms.lock().unwrap();
 
     // Find room by code
@@ -377,13 +381,13 @@ pub async fn join_room(
 
     let room = rooms.get_mut(&room_id).unwrap();
 
-    if room.host_id == body.player_id {
+    if room.host_id == player_id {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Cannot join your own room"
         }));
     }
 
-    room.guest_id = Some(body.player_id.clone());
+    room.guest_id = Some(player_id.clone());
     room.guest_name = Some(sanitise_name(&body.player_name));
     room.status = RoomStatus::Ready;
     room.last_activity = now_epoch();
@@ -403,7 +407,7 @@ pub async fn join_room(
         .player_rooms
         .lock()
         .unwrap()
-        .insert(body.player_id.clone(), room_id.clone());
+        .insert(player_id, room_id.clone());
 
     HttpResponse::Ok().json(RoomResponse {
         room_id: room.room_id.clone(),
@@ -419,19 +423,22 @@ pub async fn join_room(
 }
 
 pub async fn spectate_room(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     path: web::Path<String>,
     body: web::Json<SpectateRequest>,
 ) -> impl Responder {
+    let spectator_id = try_auth!(caller_id(&req, &config));
     let room_id = path.into_inner();
     let mut rooms = mp_state.rooms.lock().unwrap();
 
     match rooms.get_mut(&room_id) {
         Some(room) => {
             // Don't add duplicate spectators
-            if !room.spectators.iter().any(|s| s.id == body.spectator_id) {
+            if !room.spectators.iter().any(|s| s.id == spectator_id) {
                 room.spectators.push(Spectator {
-                    id: body.spectator_id.clone(),
+                    id: spectator_id,
                     name: body.spectator_name.clone(),
                     joined_at: now_epoch(),
                 });
@@ -448,11 +455,15 @@ pub async fn spectate_room(
 }
 
 pub async fn room_poll(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     game_state: web::Data<crate::api::AppState>,
     path: web::Path<String>,
     body: web::Json<PollRequest>,
 ) -> impl Responder {
+    // Anyone with the room id may watch; a token only identifies whose turn it is.
+    let player_id = caller_id(&req, &config).ok();
     let room_id = path.into_inner();
     let rooms = mp_state.rooms.lock().unwrap();
 
@@ -490,7 +501,8 @@ pub async fn room_poll(
         };
 
     // Determine if it's this player's turn
-    let your_turn = match (&side_to_move, room.color_of(&body.player_id)) {
+    let my_color = player_id.as_deref().and_then(|p| room.color_of(p));
+    let your_turn = match (&side_to_move, my_color) {
         (Some(stm), Some(mine)) => stm == mine,
         _ => false,
     };
@@ -522,11 +534,14 @@ pub async fn room_poll(
 }
 
 pub async fn room_move(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     game_state: web::Data<crate::api::AppState>,
     path: web::Path<String>,
     body: web::Json<RoomMoveRequest>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let room_id = path.into_inner();
     let mut rooms = mp_state.rooms.lock().unwrap();
 
@@ -555,11 +570,9 @@ pub async fn room_move(
         }
     };
 
-    // The caller must be one of the two seated players. Note this is a game-rule
-    // check, not a security control: player_id is client-supplied and there is
-    // no authentication yet, so a caller can still claim another player's id.
-    // Real enforcement requires authenticated identity.
-    let player_color = match room.color_of(&body.player_id) {
+    // The caller must be one of the two seated players, identified by their
+    // session token.
+    let player_color = match room.color_of(&player_id) {
         Some(c) => c,
         None => {
             return HttpResponse::Forbidden().json(serde_json::json!({
@@ -616,10 +629,13 @@ pub async fn room_move(
 }
 
 pub async fn send_chat(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     path: web::Path<String>,
     body: web::Json<SendChatRequest>,
 ) -> impl Responder {
+    let sender_id = try_auth!(caller_id(&req, &config));
     let room_id = path.into_inner();
     let mut rooms = mp_state.rooms.lock().unwrap();
 
@@ -627,7 +643,7 @@ pub async fn send_chat(
         Some(room) => {
             let msg = ChatMessage {
                 id: Uuid::new_v4().to_string(),
-                sender_id: body.sender_id.clone(),
+                sender_id,
                 sender_name: body.sender_name.clone(),
                 content: body.content.clone(),
                 timestamp: now_epoch(),
@@ -644,19 +660,24 @@ pub async fn send_chat(
 }
 
 pub async fn request_rematch(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     path: web::Path<String>,
-    body: web::Json<serde_json::Value>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let room_id = path.into_inner();
     let mut rooms = mp_state.rooms.lock().unwrap();
 
     match rooms.get_mut(&room_id) {
+        Some(room) if room.color_of(&player_id).is_none() => {
+            HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "You are not a player in this room"
+            }))
+        }
         Some(room) => {
-            let player_id = body.get("player_id").and_then(|v| v.as_str()).unwrap_or("");
-
             if room.rematch_requested_by.is_some()
-                && room.rematch_requested_by.as_deref() != Some(player_id)
+                && room.rematch_requested_by.as_deref() != Some(player_id.as_str())
             {
                 // Both players want rematch — start new game
                 let game = GameState::new();
@@ -679,7 +700,7 @@ pub async fn request_rematch(
                     "host_color": room.host_color,
                 }))
             } else {
-                room.rematch_requested_by = Some(player_id.to_string());
+                room.rematch_requested_by = Some(player_id);
                 room.last_activity = now_epoch();
 
                 HttpResponse::Ok().json(serde_json::json!({
@@ -694,20 +715,23 @@ pub async fn request_rematch(
 }
 
 pub async fn leave_room(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     mp_state: web::Data<MultiplayerState>,
     path: web::Path<String>,
-    body: web::Json<serde_json::Value>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let room_id = path.into_inner();
-    let player_id = body
-        .get("player_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
 
     let mut rooms = mp_state.rooms.lock().unwrap();
 
     match rooms.get_mut(&room_id) {
+        // Leaving abandons the room, so only a seated player may do it.
+        Some(room) if room.color_of(&player_id).is_none() => {
+            HttpResponse::Forbidden().json(serde_json::json!({
+                "error": "You are not a player in this room"
+            }))
+        }
         Some(room) => {
             room.status = RoomStatus::Abandoned;
             room.last_activity = now_epoch();
