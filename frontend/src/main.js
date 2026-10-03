@@ -4233,7 +4233,7 @@ class ChessGame {
         ${EMOTES.map(e => `<button class="mp-emote-btn" data-emote="${e.id}" title="${e.label}" style="cursor:pointer;font-size:1.2rem;background:none;border:none;padding:2px 4px">${e.emoji}</button>`).join('')}
       </div>
       <div style="display:flex;gap:4px;padding:0 8px 8px">
-        <input type="text" id="mp-chat-input" placeholder="Type..." style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border-glow);background:var(--bg-card);color:var(--text-primary);font-size:0.8rem" />
+        <input type="text" id="mp-chat-input" placeholder="Type..." maxlength="500" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border-glow);background:var(--bg-card);color:var(--text-primary);font-size:0.8rem" />
         <button class="btn" id="mp-chat-send" style="padding:6px 12px;font-size:0.8rem">Send</button>
       </div>
     `;

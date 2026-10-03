@@ -102,6 +102,11 @@ impl MultiplayerRoom {
             None
         }
     }
+
+    /// True for the seated players and anyone spectating.
+    pub fn is_participant(&self, player_id: &str) -> bool {
+        self.color_of(player_id).is_some() || self.spectators.iter().any(|s| s.id == player_id)
+    }
 }
 
 impl MultiplayerState {
@@ -218,6 +223,15 @@ const MAX_LEADERBOARD_ENTRIES: usize = 10_000;
 /// Longest accepted display name.
 const MAX_NAME_LEN: usize = 32;
 
+/// Longest accepted chat message, in characters.
+const MAX_CHAT_TEXT_LEN: usize = 500;
+
+/// Longest accepted emote id. The frontend's ids are short words.
+const MAX_EMOTE_LEN: usize = 32;
+
+/// Messages kept per room. Rooms live in memory, so chat must be bounded.
+const MAX_CHAT_MESSAGES: usize = 200;
+
 /// Whether leaderboard writes are accepted.
 ///
 /// Off by default: the endpoint attributes a result to a caller-supplied
@@ -248,6 +262,31 @@ fn sanitise_name(raw: &str) -> String {
         "Anonymous".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+/// Check client-supplied chat content and return it ready to store.
+fn validate_chat(content: &ChatContent) -> Result<ChatContent, &'static str> {
+    match content {
+        ChatContent::Text { text } => {
+            let text = text.trim();
+            if text.is_empty() {
+                Err("Message is empty")
+            } else if text.chars().count() > MAX_CHAT_TEXT_LEN {
+                Err("Message is too long")
+            } else {
+                Ok(ChatContent::Text {
+                    text: text.to_string(),
+                })
+            }
+        }
+        ChatContent::Emote { emote } => {
+            if emote.is_empty() || emote.chars().count() > MAX_EMOTE_LEN {
+                Err("Invalid emote")
+            } else {
+                Ok(content.clone())
+            }
+        }
     }
 }
 
@@ -439,7 +478,7 @@ pub async fn spectate_room(
             if !room.spectators.iter().any(|s| s.id == spectator_id) {
                 room.spectators.push(Spectator {
                     id: spectator_id,
-                    name: body.spectator_name.clone(),
+                    name: sanitise_name(&body.spectator_name),
                     joined_at: now_epoch(),
                 });
             }
@@ -639,24 +678,40 @@ pub async fn send_chat(
     let room_id = path.into_inner();
     let mut rooms = mp_state.rooms.lock().unwrap();
 
-    match rooms.get_mut(&room_id) {
-        Some(room) => {
-            let msg = ChatMessage {
-                id: Uuid::new_v4().to_string(),
-                sender_id,
-                sender_name: body.sender_name.clone(),
-                content: body.content.clone(),
-                timestamp: now_epoch(),
-            };
-            room.chat_messages.push(msg.clone());
-            room.last_activity = now_epoch();
-
-            HttpResponse::Ok().json(msg)
+    let room = match rooms.get_mut(&room_id) {
+        Some(r) => r,
+        None => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Room not found"
+            }))
         }
-        None => HttpResponse::NotFound().json(serde_json::json!({
-            "error": "Room not found"
-        })),
+    };
+    if !room.is_participant(&sender_id) {
+        return HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "You are not in this room"
+        }));
     }
+    let content = match validate_chat(&body.content) {
+        Ok(c) => c,
+        Err(e) => return HttpResponse::BadRequest().json(serde_json::json!({ "error": e })),
+    };
+    if room.chat_messages.len() >= MAX_CHAT_MESSAGES {
+        return HttpResponse::TooManyRequests().json(serde_json::json!({
+            "error": "This room's chat is full"
+        }));
+    }
+
+    let msg = ChatMessage {
+        id: Uuid::new_v4().to_string(),
+        sender_id,
+        sender_name: sanitise_name(&body.sender_name),
+        content,
+        timestamp: now_epoch(),
+    };
+    room.chat_messages.push(msg.clone());
+    room.last_activity = now_epoch();
+
+    HttpResponse::Ok().json(msg)
 }
 
 pub async fn request_rematch(
