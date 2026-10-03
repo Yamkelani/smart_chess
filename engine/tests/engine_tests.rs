@@ -13,7 +13,7 @@
 use chess_engine::board::{sq, square_from_name, square_name, Board};
 use chess_engine::evaluation::{evaluate, search_best_move_timed};
 use chess_engine::game::{GameState, GameStatus};
-use chess_engine::moves::{generate_legal_moves, make_move, Move};
+use chess_engine::moves::{generate_legal_moves, Move};
 use chess_engine::piece::{Color, Piece, PieceType};
 use chess_engine::zobrist::hash_board;
 
@@ -241,9 +241,8 @@ fn stalemate_position() {
 
 #[test]
 fn game_detects_checkmate() {
-    let mut game =
-        GameState::from_fen("rnbqkbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
-            .unwrap();
+    let game = GameState::from_fen("rnbqkbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
+        .unwrap();
     // White is in check from Qh4. All escape attempts fail = checkmate.
     let legal = game.get_legal_moves();
     assert!(legal.is_empty(), "Should have no legal moves");
