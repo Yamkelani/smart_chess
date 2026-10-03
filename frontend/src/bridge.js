@@ -108,14 +108,28 @@ async function _sessionToken() {
   return _sessionRequest;
 }
 
+function _withToken(options, token) {
+  const headers = new Headers(options.headers || {});
+  headers.set('Authorization', `Bearer ${token}`);
+  return { ...options, headers };
+}
+
 /**
  * fetch() for our own engine and AI service: attaches the guest token when
- * one is available, and otherwise sends the request unchanged.
+ * one is available, and otherwise sends the request unchanged. If the server
+ * rejects the token (e.g. its secret changed), a new session is fetched and
+ * the request retried once.
  */
 export async function apiFetch(url, options = {}) {
   const token = await _sessionToken();
   if (!token) return fetch(url, options);
-  const headers = new Headers(options.headers || {});
-  headers.set('Authorization', `Bearer ${token}`);
-  return fetch(url, { ...options, headers });
+  const resp = await fetch(url, _withToken(options, token));
+  if (resp.status !== 401) return resp;
+
+  if (_storedSession()?.token === token) {
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* storage unavailable */ }
+  }
+  const fresh = await _sessionToken();
+  if (!fresh || fresh === token) return resp;
+  return fetch(url, _withToken(options, fresh));
 }

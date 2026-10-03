@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{http::header, web, HttpRequest, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -10,6 +10,7 @@ use crate::evaluation::{evaluate, search_best_move_timed, search_top_moves_timed
 use crate::game::{GameState, GameStatus};
 use crate::moves::generate_legal_moves;
 use crate::persistence;
+use crate::session::SessionConfig;
 use crate::variants;
 
 /// Maximum number of games to keep in memory.  When exceeded, the oldest
@@ -99,6 +100,55 @@ fn ensure_game_loaded(games: &mut HashMap<String, GameState>, game_id: &str) -> 
         true
     } else {
         false
+    }
+}
+
+/// Return early with the error response of a failed identity check.
+macro_rules! try_auth {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        }
+    };
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The player id behind the request's `Authorization: Bearer` session token.
+fn caller_id(req: &HttpRequest, config: &SessionConfig) -> Result<String, HttpResponse> {
+    req.headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|token| config.verify(token, unix_now()).ok())
+        .ok_or_else(|| {
+            HttpResponse::Unauthorized().json(ErrorResponse {
+                error: "A valid session token is required".to_string(),
+            })
+        })
+}
+
+/// Only the player who created a game may change it. Games without an owner
+/// were saved before ownership existed and are read-only.
+fn authorize_owner(
+    games: &HashMap<String, GameState>,
+    game_id: &str,
+    player_id: &str,
+) -> Result<(), HttpResponse> {
+    match games.get(game_id) {
+        None => Err(HttpResponse::NotFound().json(ErrorResponse {
+            error: "Game not found".to_string(),
+        })),
+        Some(game) if game.owner.as_deref() == Some(player_id) => Ok(()),
+        Some(_) => Err(HttpResponse::Forbidden().json(ErrorResponse {
+            error: "Only the player who created this game can change it".to_string(),
+        })),
     }
 }
 
@@ -271,12 +321,8 @@ pub async fn health_check() -> impl Responder {
 }
 
 /// Issue a new guest identity: a random player id and a signed token.
-pub async fn create_session(config: web::Data<crate::session::SessionConfig>) -> impl Responder {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    HttpResponse::Ok().json(config.issue(now))
+pub async fn create_session(config: web::Data<SessionConfig>) -> impl Responder {
+    HttpResponse::Ok().json(config.issue(unix_now()))
 }
 
 pub async fn engine_info() -> impl Responder {
@@ -296,10 +342,13 @@ pub async fn engine_info() -> impl Responder {
 }
 
 pub async fn new_game(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     data: web::Data<AppState>,
     body: web::Json<NewGameRequest>,
 ) -> impl Responder {
-    let game = if let Some(fen) = &body.fen {
+    let player_id = try_auth!(caller_id(&req, &config));
+    let mut game = if let Some(fen) = &body.fen {
         if let Err(e) = validate_fen(fen) {
             return HttpResponse::BadRequest().json(ErrorResponse { error: e });
         }
@@ -310,6 +359,7 @@ pub async fn new_game(
     } else {
         GameState::new()
     };
+    game.owner = Some(player_id);
 
     let response = NewGameResponse {
         game_id: game.id.clone(),
@@ -337,13 +387,17 @@ pub struct SetPositionRequest {
 }
 
 pub async fn set_position(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     data: web::Data<AppState>,
     path: web::Path<String>,
     body: web::Json<SetPositionRequest>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
     ensure_game_loaded(&mut games, &game_id);
+    try_auth!(authorize_owner(&games, &game_id, &player_id));
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
         None => {
@@ -390,15 +444,19 @@ pub struct UndoRequest {
 /// reached, so it cannot be used to fabricate a position or to resurrect a
 /// finished game into one that was never played.
 pub async fn undo_moves(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     data: web::Data<AppState>,
     path: web::Path<String>,
     body: Option<web::Json<UndoRequest>>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let game_id = path.into_inner();
     let count = body.and_then(|b| b.moves).unwrap_or(1);
 
     let mut games = lock_games!(data);
     ensure_game_loaded(&mut games, &game_id);
+    try_auth!(authorize_owner(&games, &game_id, &player_id));
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
         None => {
@@ -459,14 +517,18 @@ pub async fn get_game(data: web::Data<AppState>, path: web::Path<String>) -> imp
 }
 
 pub async fn make_move(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     data: web::Data<AppState>,
     path: web::Path<String>,
     body: web::Json<MakeMoveRequest>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
 
     ensure_game_loaded(&mut games, &game_id);
+    try_auth!(authorize_owner(&games, &game_id, &player_id));
 
     match games.get_mut(&game_id) {
         Some(game) => match game.make_move(&body.uci) {
@@ -548,10 +610,13 @@ pub async fn evaluate_position(body: web::Json<EvalRequest>) -> impl Responder {
 }
 
 pub async fn engine_move(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     data: web::Data<AppState>,
     path: web::Path<String>,
     query: web::Query<EngineMoveQuery>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let game_id = path.into_inner();
     let depth = clamp_depth(query.depth);
     let budget = search_time_budget_ms();
@@ -562,6 +627,7 @@ pub async fn engine_move(
     let (search_board, fen_before, status_before) = {
         let mut games = lock_games!(data);
         ensure_game_loaded(&mut games, &game_id);
+        try_auth!(authorize_owner(&games, &game_id, &player_id));
         match games.get(&game_id) {
             Some(game) => (
                 game.board.clone(),
@@ -757,13 +823,16 @@ pub struct NewVariantGameRequest {
 }
 
 pub async fn new_variant_game(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     data: web::Data<AppState>,
     body: web::Json<NewVariantGameRequest>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let variant =
         variants::GameVariant::from_str(&body.variant).unwrap_or(variants::GameVariant::Standard);
 
-    let game = match variant {
+    let mut game = match variant {
         variants::GameVariant::Chess960 => {
             let pos = if let Some(id) = body.chess960_id {
                 chess960::generate_position(id)
@@ -786,6 +855,7 @@ pub async fn new_variant_game(
             }
         }
     };
+    game.owner = Some(player_id);
 
     let response = NewGameResponse {
         game_id: game.id.clone(),
@@ -815,13 +885,17 @@ pub struct ResignRequest {
 }
 
 pub async fn resign_game(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
     data: web::Data<AppState>,
     path: web::Path<String>,
     body: web::Json<ResignRequest>,
 ) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
     ensure_game_loaded(&mut games, &game_id);
+    try_auth!(authorize_owner(&games, &game_id, &player_id));
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
         None => {
@@ -861,10 +935,17 @@ pub async fn resign_game(
     })
 }
 
-pub async fn draw_game(data: web::Data<AppState>, path: web::Path<String>) -> impl Responder {
+pub async fn draw_game(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
+    data: web::Data<AppState>,
+    path: web::Path<String>,
+) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
     let game_id = path.into_inner();
     let mut games = lock_games!(data);
     ensure_game_loaded(&mut games, &game_id);
+    try_auth!(authorize_owner(&games, &game_id, &player_id));
     let game = match games.get_mut(&game_id) {
         Some(g) => g,
         None => {

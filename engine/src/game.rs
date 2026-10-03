@@ -55,6 +55,10 @@ pub struct GameState {
     /// produce a rated result. Defaults to false so existing saved games load.
     #[serde(default)]
     pub is_analysis: bool,
+    /// Player id of the guest session that created the game; only they may
+    /// change it. None for games saved before ownership, which are read-only.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 impl Default for GameState {
@@ -78,6 +82,7 @@ impl GameState {
             black_player: "ai".to_string(),
             hash_history: vec![initial_hash],
             is_analysis: false,
+            owner: None,
         }
     }
 
@@ -95,6 +100,7 @@ impl GameState {
             black_player: "ai".to_string(),
             hash_history: vec![initial_hash],
             is_analysis: false,
+            owner: None,
         })
     }
 
