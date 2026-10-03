@@ -4,9 +4,9 @@
 //! Any caller holding a room id could move for both colours. It also never
 //! checked whose turn it was.
 //!
-//! These cover the seat-and-turn rules. They are not a substitute for
-//! authentication: `player_id` is client-supplied, so until identity is
-//! authenticated a caller can still claim another player's id.
+//! These cover the seat-and-turn rules. That the player id comes from the
+//! session token rather than the request is covered in
+//! `multiplayer_identity_tests.rs`.
 
 use chess_engine::multiplayer::{MultiplayerRoom, RoomStatus};
 

@@ -55,7 +55,6 @@ export class MultiplayerManager {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        player_id: this.playerId,
         player_name: this.playerName,
         host_color: options.color || 'white',
         variant: options.variant || 'standard',
@@ -79,7 +78,6 @@ export class MultiplayerManager {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        player_id: this.playerId,
         player_name: this.playerName,
         room_code: code.toUpperCase(),
       }),
@@ -105,7 +103,6 @@ export class MultiplayerManager {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        spectator_id: this.playerId,
         spectator_name: this.playerName,
       }),
     });
@@ -122,10 +119,7 @@ export class MultiplayerManager {
     const resp = await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        player_id: this.playerId,
-        uci,
-      }),
+      body: JSON.stringify({ uci }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: 'Move failed' }));
@@ -140,7 +134,6 @@ export class MultiplayerManager {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sender_id: this.playerId,
         sender_name: this.playerName,
         content: { type: 'text', text },
       }),
@@ -153,7 +146,6 @@ export class MultiplayerManager {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sender_id: this.playerId,
         sender_name: this.playerName,
         content: { type: 'emote', emote },
       }),
@@ -164,8 +156,6 @@ export class MultiplayerManager {
     if (!this.roomId) return;
     const resp = await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/rematch`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ player_id: this.playerId }),
     });
     return resp.json();
   }
@@ -176,8 +166,6 @@ export class MultiplayerManager {
     try {
       await apiFetch(`${getBase()}/multiplayer/room/${this.roomId}/leave`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player_id: this.playerId }),
       });
     } catch (e) { /* ignore */ }
     this.roomId = null;
@@ -241,7 +229,6 @@ export class MultiplayerManager {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          player_id: this.playerId,
           last_move_count: this._lastMoveCount,
           last_chat_count: this._lastChatCount,
         }),
