@@ -4304,7 +4304,7 @@ class ChessGame {
     if (data.fen) {
       await this._loadPosition(data.fen, data.pieces, data.legal_moves);
     }
-    this._updateStatus(`Multiplayer — ${this.multiplayer.myColor === 'white' ? '⬜' : '⬛'} You play ${this.multiplayer.myColor}`);
+    this._showStatus(`Multiplayer — ${this.multiplayer.myColor === 'white' ? '⬜' : '⬛'} You play ${this.multiplayer.myColor}`);
     this._showMultiplayerChat();
   }
 
@@ -4482,7 +4482,7 @@ class ChessGame {
     this._puzzleMoveIndex = 0;
     this._puzzleMode = true;
     this.newGame(puzzle.fen).then(() => {
-      this._updateStatus(`📅 Daily Puzzle: ${puzzle.title}`);
+      this._showStatus(`📅 Daily Puzzle: ${puzzle.title}`);
     });
   }
 
@@ -4498,7 +4498,7 @@ class ChessGame {
         sounds.playPuzzleCorrect?.() || sounds.playCapture?.();
         this._dailyPuzzleMode = false;
         this._puzzleMode = false;
-        this._updateStatus('✅ Daily Puzzle Solved! Streak: ' + stats.currentStreak);
+        this._showStatus('✅ Daily Puzzle Solved! Streak: ' + stats.currentStreak);
         const badge = document.getElementById('daily-badge');
         if (badge) badge.style.display = 'none';
         return true;
@@ -4556,7 +4556,7 @@ class ChessGame {
     this._puzzleMode = true;
 
     this._timedDrillSession.onTick((remaining, solved) => {
-      this._updateStatus(`⏱️ ${Math.ceil(remaining)}s — Solved: ${solved}/${this._timedDrillSession.puzzles.length}`);
+      this._showStatus(`⏱️ ${Math.ceil(remaining)}s — Solved: ${solved}/${this._timedDrillSession.puzzles.length}`);
     });
 
     this._timedDrillSession.onComplete((result) => {
@@ -4722,7 +4722,7 @@ class ChessGame {
       btn.textContent = this._blindfoldMode ? '👁️ Show Pieces' : '🙈 Blindfold';
       btn.classList.toggle('active', this._blindfoldMode);
     }
-    this._updateStatus(this._blindfoldMode ? '🙈 Blindfold Mode — pieces hidden!' : 'Pieces visible');
+    this._showStatus(this._blindfoldMode ? '🙈 Blindfold Mode — pieces hidden!' : 'Pieces visible');
   }
 
   // ══════════════════════════════════════════════════════════════
