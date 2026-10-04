@@ -1029,6 +1029,7 @@ class ChessGame {
     if (this.board.clearAnnotations) this.board.clearAnnotations();
 
     const isPlayerTurn = this._isPlayerTurn();
+    if (this._multiplayerActive && !isPlayerTurn) return;
 
     // Pre-move system: if it's not our turn, queue the pre-move
     if (!isPlayerTurn && this.useAI) {
@@ -1081,6 +1082,45 @@ class ChessGame {
         sounds.playSelect();
       }
     }
+  }
+
+  /** Send a move to the multiplayer room and show the room's reply. */
+  async _makeMultiplayerMove(uci) {
+    let data;
+    try {
+      data = await this.multiplayer.makeMove(uci);
+    } catch (err) {
+      this._showStatus(err.message || 'Move failed');
+      return;
+    }
+    if (!data || !data.success) return;
+
+    const fromSq = uci.substring(0, 2);
+    const toSq = uci.substring(2, 4);
+    if (data.captured) sounds.playCapture();
+    else sounds.playMove();
+    this.board.animateMove(fromSq, toSq);
+
+    this.lastMoveFrom = fromSq;
+    this.lastMoveTo = toSq;
+    this.moveHistory.push(uci); // the room poll reports history in UCI too
+    this._fenLog.push(data.fen);
+    this.fen = data.fen;
+    this.pieces = data.pieces;
+    this.legalMoves = data.legal_moves;
+    this.isCheck = data.is_check;
+    this.status = data.status;
+    this.winner = data.winner ?? null;
+    this.checks = data.checks ?? null;
+    this.sideToMove = this.sideToMove === 'white' ? 'black' : 'white';
+
+    setTimeout(() => {
+      this.board.setPieces(this.pieces);
+      this.board.clearHighlights();
+      this.board.highlightLastMove(fromSq, toSq);
+    }, 220);
+    this._updateUI();
+    // A finished game is announced by the room poll, once for both players.
   }
 
   /** Record the variant of the game just started and set up its extras. */
@@ -1139,6 +1179,7 @@ class ChessGame {
   }
 
   async _makeMove(uci) {
+    if (this._multiplayerActive) return this._makeMultiplayerMove(uci);
     try {
       // Start timer on very first move
       if (!this._timerStarted) {
@@ -3977,8 +4018,14 @@ class ChessGame {
     overlay.style.display = 'block';
     sounds.playGameOver(isWin);
 
+    // Rooms have no Play Again (rematch is not offered yet)
+    const playAgainBtn = document.getElementById('overlay-play-again-btn');
+    if (playAgainBtn) playAgainBtn.style.display = this._multiplayerActive ? 'none' : '';
+
     // Add mode-specific message
-    if (this.gameMode === 'friendly') {
+    if (this._multiplayerActive) {
+      // Single-player modes do not apply to a room game
+    } else if (this.gameMode === 'friendly') {
       msg.textContent += ' — Friendly match (no rating change)';
     } else if (this.gameMode === 'training') {
       msg.textContent += ' — Review the coach tips above to learn from this game!';
@@ -4243,6 +4290,17 @@ class ChessGame {
     this._multiplayerActive = true;
     this.useAI = false;
     this._adoptVariant({ variant: this.multiplayer.variant, checks: data.checks });
+    // The room is the game: never send moves to a leftover single-player game.
+    this.gameId = null;
+    this.playerColor = this.multiplayer.myColor;
+    this.status = 'Active';
+    this.winner = null;
+    this.moveHistory = data.move_history || [];
+    this.sideToMove = data.side_to_move || 'white';
+    this.selectedSquare = null;
+    this._fenLog = data.fen ? [data.fen] : [];
+    this.board.clearHighlights();
+    if (this.board.flipped !== (this.playerColor === 'black')) this.board.flipBoard();
     if (data.fen) {
       await this._loadPosition(data.fen, data.pieces, data.legal_moves);
     }
@@ -4259,6 +4317,9 @@ class ChessGame {
       this.isCheck = data.is_check || false;
       this.moveHistory = data.move_history || [];
       this.checks = data.checks ?? null;
+      this.status = data.game_status || this.status;
+      this.winner = data.winner ?? null;
+      if (this._fenLog[this._fenLog.length - 1] !== data.fen) this._fenLog.push(data.fen);
       this.board.updatePieces(this.pieces);
       this._updateUI();
     }
@@ -4338,6 +4399,12 @@ class ChessGame {
   }
 
   _handleMultiplayerGameOver(data) {
+    this.status = data.game_status;
+    this.winner = data.winner ?? null;
+    this.checks = data.checks ?? this.checks;
+    this.sideToMove = data.side_to_move || this.sideToMove;
+    this._updateUI();
+    this._showGameOver(); // still flagged as multiplayer, so Play Again stays hidden
     this._multiplayerActive = false;
     // Clean up chat button
     const chatBtn = document.getElementById('mp-chat-btn');

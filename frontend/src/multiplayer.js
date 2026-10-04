@@ -19,6 +19,8 @@ export class MultiplayerManager {
     this.isHost = false;
     this.myColor = 'white';
     this.gameId = null;
+    this._gameStarted = false;
+    this._gameOverShown = false;
     this._pollTimer = null;
     this._lastMoveCount = 0;
     this._lastChatCount = 0;
@@ -69,6 +71,8 @@ export class MultiplayerManager {
     this.myColor = data.host_color;
     this.variant = data.variant;
     this.connected = true;
+    this._gameStarted = false;
+    this._gameOverShown = false;
     this._startPolling();
     this._emit('room-created', data);
     return data;
@@ -95,6 +99,8 @@ export class MultiplayerManager {
     this.variant = data.variant;
     this.gameId = data.game_id;
     this.connected = true;
+    this._gameStarted = false;
+    this._gameOverShown = false;
     this._startPolling();
     this._emit('room-joined', data);
     return data;
@@ -250,14 +256,16 @@ export class MultiplayerManager {
         data.new_chat_messages.forEach(msg => this._emit('chat', msg));
       }
 
-      // Check for game start
-      if (data.status === 'Playing' && !this.gameId && data.fen) {
-        this.gameId = true;
+      // Game start, once per game. Both players get it: the guest's join
+      // response carries no position, so this is where their board loads.
+      if (data.status === 'Playing' && data.fen && !this._gameStarted) {
+        this._gameStarted = true;
         this._emit('game-started', data);
       }
 
-      // Check for game end
-      if (data.game_status && data.game_status !== 'Active') {
+      // Game end, once per game (polling continues afterwards)
+      if (data.game_status && data.game_status !== 'Active' && !this._gameOverShown) {
+        this._gameOverShown = true;
         this._emit('game-over', data);
       }
 

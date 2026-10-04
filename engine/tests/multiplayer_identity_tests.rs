@@ -251,3 +251,39 @@ async fn a_rematch_game_can_be_played() {
     );
     assert_eq!(status, 200, "{body}");
 }
+
+#[actix_web::test]
+async fn a_finished_room_game_reports_its_winner() {
+    let app = app!();
+    let (_, host) = session(); // white
+    let (_, guest) = session(); // black
+    let room = seated_room!(app, &host, &guest);
+    let uri = format!("/multiplayer/room/{room}/move");
+
+    // Fool's mate: 1.f3 e5 2.g4 Qh4#
+    for (who, uci) in [
+        (&host, "f2f3"),
+        (&guest, "e7e5"),
+        (&host, "g2g4"),
+        (&guest, "d8h4"),
+    ] {
+        let (status, body) = post!(app, uri, Some(who), json!({ "uci": uci }));
+        assert_eq!(status, 200, "{uci}: {body}");
+        if uci == "d8h4" {
+            assert_eq!(body["winner"], "black");
+        } else {
+            assert_eq!(body["winner"], Value::Null);
+        }
+    }
+
+    for token in [Some(&host), Some(&guest), None] {
+        let (_, poll) = post!(
+            app,
+            format!("/multiplayer/room/{room}/poll"),
+            token,
+            json!({})
+        );
+        assert_eq!(poll["status"], "Finished");
+        assert_eq!(poll["winner"], "black");
+    }
+}

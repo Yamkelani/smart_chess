@@ -206,6 +206,8 @@ pub struct PollResponse {
     pub side_to_move: Option<String>,
     pub is_check: bool,
     pub game_status: Option<String>,
+    /// Winning colour once the game is over; null while playing or on a draw.
+    pub winner: Option<String>,
     pub move_history: Vec<String>,
     pub new_chat_messages: Vec<ChatMessage>,
     pub spectator_count: usize,
@@ -546,11 +548,9 @@ pub async fn room_poll(
         } else {
             (None, None, None, None, false, None, Vec::new())
         };
-    let checks = room
-        .game_id
-        .as_ref()
-        .and_then(|id| games.get(id))
-        .and_then(|game| game.check_count());
+    let room_game = room.game_id.as_ref().and_then(|id| games.get(id));
+    let checks = room_game.and_then(|game| game.check_count());
+    let winner = room_game.and_then(|game| game.status.winner().map(str::to_string));
 
     // Determine if it's this player's turn
     let my_color = player_id.as_deref().and_then(|p| room.color_of(p));
@@ -576,6 +576,7 @@ pub async fn room_poll(
         side_to_move,
         is_check,
         game_status,
+        winner,
         move_history,
         new_chat_messages: new_messages,
         spectator_count: room.spectators.len(),
@@ -673,6 +674,7 @@ pub async fn room_move(
                 "captured": result.captured,
                 "is_check": result.is_check,
                 "status": format!("{:?}", game.status),
+                "winner": game.status.winner(),
                 "checks": game.check_count(),
             }))
         }
