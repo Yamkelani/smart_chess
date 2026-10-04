@@ -237,3 +237,26 @@ async fn unknown_game_is_not_found_for_a_valid_token() {
         404
     );
 }
+
+#[actix_web::test]
+async fn a_game_started_from_a_custom_position_is_unrated() {
+    let app = app!(HashMap::new());
+    let owner = token();
+    for (body, expected) in [
+        (json!({}), false),
+        (json!({"fen": "4k3/8/8/8/8/8/QQQQ1QQQ/4K3 w - - 0 1"}), true),
+    ] {
+        let req = test::TestRequest::post()
+            .uri("/game/new")
+            .insert_header(bearer(&owner))
+            .set_json(body.clone())
+            .to_request();
+        let created: Value = test::call_and_read_body_json(&app, req).await;
+        let id = created["game_id"].as_str().unwrap();
+        let req = test::TestRequest::get()
+            .uri(&format!("/game/{id}"))
+            .to_request();
+        let game: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(game["is_analysis"], expected, "{body}");
+    }
+}

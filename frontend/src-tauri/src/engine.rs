@@ -109,7 +109,7 @@ pub struct AnalyzeResponse {
 #[tauri::command]
 pub fn new_game(state: State<'_, EngineState>, fen: Option<String>) -> Result<NewGameResponse, String> {
     let game = if let Some(fen_str) = fen {
-        GameState::from_fen(&fen_str)?
+        GameState::from_custom_position(&fen_str)?
     } else {
         GameState::new()
     };
@@ -127,7 +127,7 @@ pub fn new_variant_game(
     let variant = GameVariant::from_str(&variant).ok_or("Unknown variant")?;
     let game = match fen {
         Some(fen_str) if variant != GameVariant::Chess960 => {
-            let mut game = GameState::from_fen(&fen_str)?;
+            let mut game = GameState::from_custom_position(&fen_str)?;
             game.variant = variant;
             game
         }

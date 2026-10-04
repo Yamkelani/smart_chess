@@ -118,6 +118,14 @@ impl GameState {
         }
     }
 
+    /// Start a game from a position the caller chose (editor, FEN, puzzle).
+    /// It did not arise from play, so like `load_position` it is unrated.
+    pub fn from_custom_position(fen: &str) -> Result<Self, String> {
+        let mut game = Self::from_fen(fen)?;
+        game.is_analysis = true;
+        Ok(game)
+    }
+
     /// Start a game of `variant`. Chess960 starts from position `chess960_id`
     /// (0-959), or a random one when None; every other variant starts from the
     /// standard position.
