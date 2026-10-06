@@ -1376,6 +1376,7 @@ class ChessGame {
 
           const san = this._uciToSAN(lastUci, this.pieces, gameData.pieces, gameData.is_check, gameData.status, !!engineResult.captured);
           this.moveHistory.push(san);
+          this._recordComputerMove(lastUci, engineResult.captured, gameData.fen);
           this.fen = gameData.fen;
           this.pieces = gameData.pieces;
           this.legalMoves = gameData.legal_moves;
@@ -1413,6 +1414,12 @@ class ChessGame {
         if (engineResult && engineResult.success) {
           const prevPieces2 = [...this.pieces];
           const gameData = await this.api.getGame(this.gameId);
+          if (engineResult.captured) {
+            const capColor = this.sideToMove === 'white' ? 'black' : 'white';
+            if (capColor === 'white') this.capturedWhite.push(engineResult.captured);
+            else this.capturedBlack.push(engineResult.captured);
+          }
+          this._recordComputerMove(engineResult.move_uci, engineResult.captured, gameData.fen);
           this.fen = gameData.fen;
           this.pieces = gameData.pieces;
           this.legalMoves = gameData.legal_moves;
@@ -1496,10 +1503,15 @@ class ChessGame {
     // Track for undo
     this._fenHistory.push(this.fen);
     this._moveHistoryUCI.push(uci);
+    this._redoStack = [];
 
     const prevPieces = [...this.pieces];
     const data = await this.api.makeMove(this.gameId, uci);
-    if (!data.success) return;
+    if (!data.success) {
+      this._fenHistory.pop();
+      this._moveHistoryUCI.pop();
+      return;
+    }
 
     const fromSq = uci.substring(0, 2);
     const toSq = uci.substring(2, 4);
@@ -1510,8 +1522,10 @@ class ChessGame {
       const capColor = this.sideToMove === 'white' ? 'black' : 'white';
       if (capColor === 'white') this.capturedWhite.push(data.captured);
       else this.capturedBlack.push(data.captured);
+      this._capturedHistory.push({ piece: data.captured, color: capColor });
       sounds.playCapture();
     } else {
+      this._capturedHistory.push(null);
       sounds.playMove();
     }
 
@@ -1751,10 +1765,50 @@ class ChessGame {
     msgEl.scrollTop = msgEl.scrollHeight;
   }
 
+  /**
+   * Add a computer move made by the engine to the undo history and the review
+   * log, as the player's moves are, so they stay in step with the engine's own
+   * history. Call before `this.fen` changes.
+   */
+  _recordComputerMove(uci, captured, fenAfter) {
+    const capColor = this.sideToMove === 'white' ? 'black' : 'white';
+    this._fenHistory.push(this.fen);
+    this._moveHistoryUCI.push(uci);
+    this._capturedHistory.push(captured ? { piece: captured, color: capColor } : null);
+    this._fenLog.push(fenAfter);
+    // A new move invalidates anything left to redo, as a player move does
+    this._redoStack = [];
+    this._updateUndoRedoButtons();
+  }
+
+  /**
+   * Undo. Against the computer, take moves back until it is the player's turn
+   * again (normally the computer's reply and the player's move together). If
+   * the computer had moved first, it plays again.
+   */
   async _undo() {
-    // Undo exactly one move by restoring from FEN history
-    if (this.thinking || this.status !== 'Active') return;
-    if (this._fenHistory.length === 0) return;
+    if (this._multiplayerActive) return; // a room game has no undo
+    if (!(await this._undoOne())) return;
+    if (!this.useAI) return;
+    while (!this._isPlayerTurn() && this._fenHistory.length > 0) {
+      if (!(await this._undoOne())) return;
+    }
+    if (!this._isPlayerTurn()) await this._aiMove();
+  }
+
+  /** Redo. Against the computer, replay moves until it is the player's turn again. */
+  async _redo() {
+    if (this._multiplayerActive) return;
+    if (!(await this._redoOne())) return;
+    while (this.useAI && !this._isPlayerTurn() && this._redoStack.length > 0) {
+      if (!(await this._redoOne())) return;
+    }
+  }
+
+  /** Take back exactly one move. Returns whether it was taken back. */
+  async _undoOne() {
+    if (this.thinking || this.status !== 'Active') return false;
+    if (this._fenHistory.length === 0) return false;
 
     // Pop the last move's data
     const targetFen = this._fenHistory.pop();
@@ -1802,7 +1856,7 @@ class ChessGame {
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
-      this.sideToMove = this.moveHistory.length % 2 === 0 ? 'white' : 'black';
+      this.sideToMove = data.fen.split(' ')[1] === 'b' ? 'black' : 'white';
       this.isCheck = false;
       this.selectedSquare = null;
 
@@ -1824,6 +1878,7 @@ class ChessGame {
       this._updateUI();
       this._updateUndoRedoButtons();
       sounds.playSelect();
+      return true;
     } catch (err) {
       console.error('Undo failed:', err);
       // Rollback — re-push everything we popped
@@ -1839,11 +1894,13 @@ class ChessGame {
           this.capturedBlack.push(redoItem.captured.piece);
         }
       }
+      return false;
     }
   }
 
-  async _redo() {
-    if (this.thinking || this._redoStack.length === 0 || this.status !== 'Active') return;
+  /** Replay exactly one undone move. Returns whether it was replayed. */
+  async _redoOne() {
+    if (this.thinking || this._redoStack.length === 0 || this.status !== 'Active') return false;
 
     const redoItem = this._redoStack.pop();
 
@@ -1863,7 +1920,7 @@ class ChessGame {
         this.moveHistory.pop();
         this._capturedHistory.pop();
         this._redoStack.push(redoItem);
-        return;
+        return false;
       }
 
       this._fenLog.push(data.fen);
@@ -1875,7 +1932,7 @@ class ChessGame {
       this.winner = data.winner ?? null;
       this.checks = data.checks ?? null;
       this.isAnalysis = data.is_analysis ?? this.isAnalysis;
-      this.sideToMove = this.moveHistory.length % 2 === 0 ? 'white' : 'black';
+      this.sideToMove = data.fen.split(' ')[1] === 'b' ? 'black' : 'white';
       this.selectedSquare = null;
 
       // Restore captured-piece tracking
@@ -1907,6 +1964,7 @@ class ChessGame {
       this._updateUI();
       this._updateUndoRedoButtons();
       sounds.playSelect();
+      return true;
     } catch (err) {
       console.error('Redo failed:', err);
       // Rollback
@@ -1915,6 +1973,7 @@ class ChessGame {
       this.moveHistory.pop();
       this._capturedHistory.pop();
       this._redoStack.push(redoItem);
+      return false;
     }
   }
 
