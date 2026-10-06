@@ -940,6 +940,7 @@ class ChessGame {
     this._hadPromotion = false;
     this._currentOpening = null;
     this._puzzleMode = false;
+    this._dailyPuzzleMode = false;
     this._drillMode = false;
     this._currentDrill = null;
     this._drillMoveIndex = 0;
@@ -1283,17 +1284,19 @@ class ChessGame {
         this._liveTutorAnalysis();
       }
 
+      // Puzzle mode: judge the move before the game-over check. A solving move
+      // may end the game (mate in one), and the result belongs to the puzzle.
+      // The opponent's scripted reply is played, not judged.
+      if (this._puzzleMode && this._currentPuzzle && !this._puzzleReplying) {
+        this._checkPuzzleMove(uci);
+        return;
+      }
+
       // Check for game over
       if (this.status !== 'Active') {
         this._stopTimer();
         this._showGameOver();
         this._onGameEnd();
-        return;
-      }
-
-      // Puzzle mode: check the move first (don't let AI respond)
-      if (this._puzzleMode && this._currentPuzzle) {
-        this._checkPuzzleMove(uci);
         return;
       }
 
@@ -2469,48 +2472,64 @@ class ChessGame {
       }
       if (!puzzle) return;
 
-      this._puzzleMode = true;
-      this._currentPuzzle = puzzle;
-      this._puzzleMoveIndex = 0;
-      this._savedUseAI = this.useAI;
-      this.useAI = false; // Disable AI auto-response during puzzles
-
-      // Load the puzzle FEN position
-      const data = await this.api.newGame(puzzle.fen);
-      this.gameId = data.game_id;
-      this._adoptVariant(data);
-      this.fen = data.fen;
-      this.pieces = data.pieces;
-      this.legalMoves = data.legal_moves;
-      this.sideToMove = puzzle.fen.includes(' w ') ? 'white' : 'black';
-      this.playerColor = this.sideToMove;
-      this.status = 'Active';
-      this.winner = null;
-      this.isAnalysis = false;
-      this.moveHistory = [];
-
-      this.board.clearHighlights();
-      this.board.setPieces(this.pieces);
-      this._updateUI();
-
-      // Show puzzle info in coach panel
-      const coachEl = document.getElementById('tutor-coach-content');
-      if (coachEl) {
-        coachEl.innerHTML = `
-          <div class="tutor-tip"><span class="tutor-tag gold">🧩 PUZZLE</span> <strong>${puzzle.title}</strong></div>
-          <div class="tutor-tip">${puzzle.description || 'Find the best move!'}</div>
-          <div class="tutor-tip" style="font-size:0.7rem;color:var(--text-muted);">Rating: ${puzzle.rating} · Theme: ${puzzle.theme || 'general'}</div>
-        `;
-      }
-      // Open coach panel
-      const tutorPanel = document.getElementById('tutor-panel');
-      if (tutorPanel) tutorPanel.classList.remove('minimized');
-
-      // Show puzzle info bar
-      this._showPuzzleStatus(`🧩 ${puzzle.title} — Find the best move!`, 'info');
+      this._dailyPuzzleMode = false;
+      await this._loadPuzzle(puzzle);
     } catch (e) {
       console.error('Failed to start puzzle:', e);
     }
+  }
+
+  /**
+   * Set up the board for a puzzle. Not newGame(): that would leave puzzle
+   * mode. A puzzle with `_localOnly` is checked against its own `_solution`
+   * and never sent to the AI service, which only knows its own puzzles.
+   */
+  async _loadPuzzle(puzzle) {
+    this._puzzleMode = true;
+    this._currentPuzzle = puzzle;
+    this._puzzleMoveIndex = 0;
+    // A fresh history: Undo must not step back into the previous game
+    this._fenHistory = [];
+    this._moveHistoryUCI = [];
+    this._redoStack = [];
+    this._capturedHistory = [];
+    // Keep the player's own setting if a puzzle starts while one is running
+    if (this._savedUseAI === undefined) this._savedUseAI = this.useAI;
+    this.useAI = false; // Disable AI auto-response during puzzles
+
+    // Load the puzzle FEN position
+    const data = await this.api.newGame(puzzle.fen);
+    this.gameId = data.game_id;
+    this._adoptVariant(data);
+    this.fen = data.fen;
+    this.pieces = data.pieces;
+    this.legalMoves = data.legal_moves;
+    this.sideToMove = puzzle.fen.includes(' w ') ? 'white' : 'black';
+    this.playerColor = this.sideToMove;
+    this.status = 'Active';
+    this.winner = null;
+    this.isAnalysis = false;
+    this.moveHistory = [];
+
+    this.board.clearHighlights();
+    this.board.setPieces(this.pieces);
+    this._updateUI();
+
+    // Show puzzle info in coach panel
+    const coachEl = document.getElementById('tutor-coach-content');
+    if (coachEl) {
+      coachEl.innerHTML = `
+        <div class="tutor-tip"><span class="tutor-tag gold">🧩 PUZZLE</span> <strong>${puzzle.title}</strong></div>
+        <div class="tutor-tip">${puzzle.description || 'Find the best move!'}</div>
+        <div class="tutor-tip" style="font-size:0.7rem;color:var(--text-muted);">Rating: ${puzzle.rating} · Theme: ${puzzle.theme || 'general'}</div>
+      `;
+    }
+    // Open coach panel
+    const tutorPanel = document.getElementById('tutor-panel');
+    if (tutorPanel) tutorPanel.classList.remove('minimized');
+
+    // Show puzzle info bar
+    this._showPuzzleStatus(`🧩 ${puzzle.title} — Find the best move!`, 'info');
   }
 
   _showPuzzleStatus(text, type) {
@@ -2539,8 +2558,8 @@ class ChessGame {
     if (!this._currentPuzzle) return false;
 
     try {
-      // Try API first
-      let result = await this.api.checkPuzzleMove(
+      // Try API first (unless the puzzle is only known locally)
+      let result = this._currentPuzzle._localOnly ? null : await this.api.checkPuzzleMove(
         this._currentPuzzle.id,
         this._puzzleMoveIndex,
         uci
@@ -2569,6 +2588,7 @@ class ChessGame {
 
         if (result.completed) {
           this._showPuzzleStatus('✅ Puzzle Solved! Excellent!', 'correct');
+          if (this._dailyPuzzleMode) this._completeDailyPuzzle();
           if (!this._solvedPuzzles.includes(this._currentPuzzle.id)) {
             this._solvedPuzzles.push(this._currentPuzzle.id);
             localStorage.setItem('chess_solved_puzzles', JSON.stringify(this._solvedPuzzles));
@@ -2590,7 +2610,12 @@ class ChessGame {
           this._showPuzzleStatus('✓ Correct! Opponent responds...', 'correct');
           // Opponent's reply
           setTimeout(async () => {
-            await this._makeMove(result.next_move);
+            this._puzzleReplying = true;
+            try {
+              await this._makeMove(result.next_move);
+            } finally {
+              this._puzzleReplying = false;
+            }
             this._puzzleMoveIndex++;
             this._showPuzzleStatus('Your turn — find the next move!', 'info');
           }, 800);
@@ -2599,6 +2624,12 @@ class ChessGame {
       } else {
         sounds.playPuzzleWrong();
         this._showPuzzleStatus('✗ Not the best move. Try again!', 'wrong');
+        // The engine has already played the move; take it back so the
+        // puzzle position is restored, even if the move ended the game.
+        this.status = 'Active';
+        await this._undo();
+        this._redoStack.pop();
+        this._updateUndoRedoButtons();
         return false;
       }
     } catch (e) {
@@ -4481,37 +4512,25 @@ class ChessGame {
     }
   }
 
-  _startDailyPuzzle(puzzle) {
+  async _startDailyPuzzle(puzzle) {
     this._dailyPuzzleMode = true;
-    this._currentPuzzle = puzzle;
-    this._puzzleMoveIndex = 0;
-    this._puzzleMode = true;
-    this.newGame(puzzle.fen).then(() => {
-      this._showStatus(`📅 Daily Puzzle: ${puzzle.title}`);
+    await this._loadPuzzle({
+      ...puzzle,
+      description: puzzle.desc,
+      _solution: puzzle.solution,
+      _localOnly: true,
     });
+    this._showStatus(`📅 Daily Puzzle: ${puzzle.title}`);
   }
 
-  _checkDailyPuzzleMove(uci) {
-    if (!this._dailyPuzzleMode || !this._currentPuzzle) return false;
-    const expected = this._currentPuzzle.solution[this._puzzleMoveIndex];
-    if (uci === expected) {
-      this._puzzleMoveIndex++;
-      if (this._puzzleMoveIndex >= this._currentPuzzle.solution.length) {
-        // Solved!
-        const stats = solveDailyPuzzle();
-        addXP('daily_puzzle');
-        sounds.playPuzzleCorrect?.() || sounds.playCapture?.();
-        this._dailyPuzzleMode = false;
-        this._puzzleMode = false;
-        this._showStatus('✅ Daily Puzzle Solved! Streak: ' + stats.currentStreak);
-        const badge = document.getElementById('daily-badge');
-        if (badge) badge.style.display = 'none';
-        return true;
-      }
-      return true;
-    }
-    sounds.playIllegal?.();
-    return false;
+  /** Today's puzzle is solved: record the streak and XP, and clear the badge. */
+  _completeDailyPuzzle() {
+    const stats = solveDailyPuzzle();
+    addXP('daily_puzzle');
+    this._dailyPuzzleMode = false;
+    this._showStatus('✅ Daily Puzzle Solved! Streak: ' + stats.currentStreak);
+    const badge = document.getElementById('daily-badge');
+    if (badge) badge.style.display = 'none';
   }
 
   // ══════════════════════════════════════════════════════════════
