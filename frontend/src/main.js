@@ -1413,6 +1413,7 @@ class ChessGame {
         const engineResult = await this.api.engineMove(this.gameId);
         if (engineResult && engineResult.success) {
           const prevPieces2 = [...this.pieces];
+          const prevLegal2 = this.legalMoves;
           const gameData = await this.api.getGame(this.gameId);
           if (engineResult.captured) {
             const capColor = this.sideToMove === 'white' ? 'black' : 'white';
@@ -1429,7 +1430,7 @@ class ChessGame {
           this.checks = gameData.checks ?? null;
           this.isAnalysis = gameData.is_analysis ?? this.isAnalysis;
           this.sideToMove = gameData.side_to_move;
-          const san2 = this._uciToSAN(engineResult.move_uci, prevPieces2, gameData.pieces, gameData.is_check, gameData.status, false);
+          const san2 = this._uciToSAN(engineResult.move_uci, prevPieces2, gameData.pieces, gameData.is_check, gameData.status, !!engineResult.captured, prevLegal2);
           this.moveHistory.push(san2);
 
           this.board.setPieces(this.pieces);
@@ -1571,7 +1572,12 @@ class ChessGame {
 
   // ── Chess Notation ──
 
-  _uciToSAN(uci, piecesBefore, piecesAfter, isCheck, status, isCapture) {
+  /**
+   * Standard algebraic notation for a move. `legalBefore` is the list of
+   * legal moves (UCI) in the position before it, used to decide whether
+   * another piece of the same kind could also reach the destination.
+   */
+  _uciToSAN(uci, piecesBefore, piecesAfter, isCheck, status, isCapture, legalBefore = this.legalMoves) {
     const from = uci.substring(0, 2);
     const to = uci.substring(2, 4);
     const promo = uci.length > 4 ? uci[4] : null;
@@ -1595,25 +1601,21 @@ class ChessGame {
     let prefix = PREFIXES[movingPiece.piece_type] || '';
     let capture = isCapture ? 'x' : '';
 
-    // Disambiguation for non-pawn pieces
-    if (prefix && prefix !== '') {
-      const sameTypePieces = piecesBefore.filter(
-        p => p.piece_type === movingPiece.piece_type &&
-             p.color === movingPiece.color &&
-             p.square !== from
-      );
-      // Check if any other piece of same type could also move to 'to'
-      // Simplified: if multiple same-type pieces exist, add file or rank
-      if (sameTypePieces.length > 0) {
-        const sameFile = sameTypePieces.some(p => p.square[0] === from[0]);
-        const sameRank = sameTypePieces.some(p => p.square[1] === from[1]);
-        if (sameFile && sameRank) {
-          prefix += from; // full square
-        } else if (sameFile) {
-          prefix += from[1]; // rank
-        } else {
-          prefix += from[0]; // file
-        }
+    // Disambiguation for non-pawn pieces: only against other pieces of the
+    // same kind that could also legally move to the same square. Use the file
+    // if it tells them apart, else the rank, else both.
+    if (prefix) {
+      const rivals = (legalBefore || [])
+        .filter((m) => m.substring(2, 4) === to && m.substring(0, 2) !== from)
+        .map((m) => m.substring(0, 2))
+        .filter((sq) => {
+          const p = piecesBefore.find((q) => q.square === sq);
+          return p && p.piece_type === movingPiece.piece_type && p.color === movingPiece.color;
+        });
+      if (rivals.length > 0) {
+        if (!rivals.some((sq) => sq[0] === from[0])) prefix += from[0];
+        else if (!rivals.some((sq) => sq[1] === from[1])) prefix += from[1];
+        else prefix += from;
       }
     }
 
