@@ -905,7 +905,11 @@ class ChessGame {
     }
   }
 
-  async newGame() {
+  /**
+   * Start a new game. With `fen`, the game starts from that position (the
+   * position editor); it is unrated, and the engine records it so too.
+   */
+  async newGame(fen = null) {
     this.selectedSquare = null;
     this.moveHistory = [];
     this.capturedWhite = [];
@@ -916,7 +920,7 @@ class ChessGame {
     if (attackBtn) { attackBtn.textContent = 'Attack Map'; attackBtn.classList.remove('active'); }
     this.status = 'Active';
     this.winner = null;
-    this.isAnalysis = false;
+    this.isAnalysis = !!fen;
     this.playerColor = document.getElementById('color-select').value;
     this.useAI = document.getElementById('use-ai').checked;
     const variant = document.getElementById('variant-select')?.value || 'standard';
@@ -978,15 +982,16 @@ class ChessGame {
     sounds.playSelect();
 
     try {
-      const data = variant === 'standard'
-        ? await this.api.newGame()
-        : await this.api.newVariantGame(variant);
+      let data;
+      if (fen) data = await this.api.newGame(fen);
+      else if (variant === 'standard') data = await this.api.newGame();
+      else data = await this.api.newVariantGame(variant);
       this.gameId = data.game_id;
       this._adoptVariant(data);
       this.fen = data.fen;
       this.pieces = data.pieces;
       this.legalMoves = data.legal_moves;
-      this.sideToMove = 'white';
+      this.sideToMove = data.fen.split(' ')[1] === 'b' ? 'black' : 'white';
       this.isCheck = false;
 
       this.board.clearHighlights();
@@ -999,13 +1004,13 @@ class ChessGame {
 
       this._timerStarted = false;
 
-      // If player is black, AI moves first
-      if (this.useAI && this.playerColor === 'black') {
-        if (this.board.flipped === false) this.board.flipBoard();
-        await this._aiMove();
-      } else {
-        if (this.board.flipped === true) this.board.flipBoard();
-      }
+      // Face the player when playing the computer as Black
+      const faceBlack = this.useAI && this.playerColor === 'black';
+      if (this.board.flipped !== faceBlack) this.board.flipBoard();
+
+      // The computer moves first when it is its turn. From the opening that
+      // means the player chose Black; a custom position may start either side.
+      if (this.useAI && !this._isPlayerTurn()) await this._aiMove();
     } catch (err) {
       console.error('Failed to start new game:', err);
       this._showStatus('Error starting game — is the engine running?');

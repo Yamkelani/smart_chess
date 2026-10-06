@@ -365,7 +365,7 @@ pub async fn new_game(
         if let Err(e) = validate_fen(fen) {
             return HttpResponse::BadRequest().json(ErrorResponse { error: e });
         }
-        match GameState::from_fen(fen) {
+        match GameState::from_custom_position(fen) {
             Ok(g) => g,
             Err(e) => return HttpResponse::BadRequest().json(ErrorResponse { error: e }),
         }
@@ -876,7 +876,7 @@ pub async fn new_variant_game(
             if let Err(e) = validate_fen(fen) {
                 return HttpResponse::BadRequest().json(ErrorResponse { error: e });
             }
-            match GameState::from_fen(fen) {
+            match GameState::from_custom_position(fen) {
                 Ok(mut g) => {
                     g.variant = v;
                     g
