@@ -12,7 +12,6 @@ const POLL_INTERVAL = 1000; // 1 second polling
 
 export class MultiplayerManager {
   constructor() {
-    this.playerId = this._getPlayerId();
     this.playerName = localStorage.getItem('chess3d_player_name') || 'Player';
     this.roomId = null;
     this.roomCode = null;
@@ -27,15 +26,6 @@ export class MultiplayerManager {
     this._listeners = {};
     this.connected = false;
     this.spectating = false;
-  }
-
-  _getPlayerId() {
-    let id = localStorage.getItem('chess3d_player_id');
-    if (!id) {
-      id = 'p_' + Math.random().toString(36).substr(2, 12);
-      localStorage.setItem('chess3d_player_id', id);
-    }
-    return id;
   }
 
   setPlayerName(name) {
@@ -193,28 +183,6 @@ export class MultiplayerManager {
   async getLeaderboard() {
     const resp = await apiFetch(`${getBase()}/leaderboard`);
     if (!resp.ok) return [];
-    return resp.json();
-  }
-
-  /**
-   * Report a game result to the leaderboard.
-   *
-   * The rating is derived server-side and is no longer sent: accepting a
-   * client-supplied rating let any caller set any rating for any player.
-   * The server may also refuse writes entirely (403) while leaderboard writes
-   * are disabled, which is the default until identity is authenticated.
-   */
-  async updateLeaderboard(result) {
-    const resp = await apiFetch(`${getBase()}/leaderboard/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        player_id: this.playerId,
-        player_name: this.playerName,
-        result,
-      }),
-    });
-    if (!resp.ok) return null;
     return resp.json();
   }
 
