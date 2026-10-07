@@ -1207,12 +1207,13 @@ export class ChessBoard3D {
 
   // ---- Coordinate helpers ----
 
+  // A square's place in the scene never changes. Flipping only moves the
+  // camera to Black's side, so pieces, square tiles (which clicks are matched
+  // against) and coordinate labels always agree.
   _squareToWorld(file, rank) {
-    const f = this.flipped ? 7 - file : file;
-    const r = this.flipped ? 7 - rank : rank;
     return {
-      x: f * SQUARE_SIZE - BOARD_OFFSET,
-      z: -(r * SQUARE_SIZE - BOARD_OFFSET),
+      x: file * SQUARE_SIZE - BOARD_OFFSET,
+      z: -(rank * SQUARE_SIZE - BOARD_OFFSET),
     };
   }
 
@@ -2007,15 +2008,10 @@ export class ChessBoard3D {
     this._liftedPieceSq = null;
   }
 
+  /** View the board from the other side. */
   flipBoard() {
     this.flipped = !this.flipped;
     this._setCameraPosition();
-
-    this.pieceMeshes.forEach((mesh, sq) => {
-      const { file, rank } = this._fromAlgebraic(sq);
-      const pos = this._squareToWorld(file, rank);
-      mesh.position.set(pos.x, 0.04, pos.z);
-    });
   }
 
   dispose() {
