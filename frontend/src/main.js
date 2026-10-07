@@ -939,6 +939,7 @@ class ChessGame {
     this._fenLog = [];
     this._hadPromotion = false;
     this._currentOpening = null;
+    this._stopTimedDrill();
     this._puzzleMode = false;
     this._dailyPuzzleMode = false;
     this._drillMode = false;
@@ -1282,6 +1283,12 @@ class ChessGame {
       // Live coaching — non-blocking, fires after every move in training/normal mode
       if (this.gameMode !== 'friendly' && !this._puzzleMode && !this._drillMode) {
         this._liveTutorAnalysis();
+      }
+
+      // Timed drill: the drill session judges the move (its answers can be mates)
+      if (this._timedDrillSession?.active) {
+        this._handleTimedDrillMove(uci);
+        return;
       }
 
       // Puzzle mode: judge the move before the game-over check. A solving move
@@ -2534,6 +2541,7 @@ class ChessGame {
       if (!puzzle) return;
 
       this._dailyPuzzleMode = false;
+      this._stopTimedDrill();
       await this._loadPuzzle(puzzle);
     } catch (e) {
       console.error('Failed to start puzzle:', e);
@@ -2654,13 +2662,7 @@ class ChessGame {
             this._solvedPuzzles.push(this._currentPuzzle.id);
             localStorage.setItem('chess_solved_puzzles', JSON.stringify(this._solvedPuzzles));
           }
-          this._puzzleMode = false;
-          this._currentPuzzle = null;
-          // Restore AI setting
-          if (this._savedUseAI !== undefined) {
-            this.useAI = this._savedUseAI;
-            delete this._savedUseAI;
-          }
+          this._endPuzzleMode();
 
           // Show congratulations in coach
           const coachEl = document.getElementById('tutor-coach-content');
@@ -4575,6 +4577,7 @@ class ChessGame {
   }
 
   async _startDailyPuzzle(puzzle) {
+    this._stopTimedDrill();
     this._dailyPuzzleMode = true;
     await this._loadPuzzle({
       ...puzzle,
@@ -4637,34 +4640,82 @@ class ChessGame {
     });
   }
 
-  _startTimedDrill(configId) {
-    this._timedDrillSession = new TimedDrillSession(configId);
-    this._puzzleMode = true;
+  async _startTimedDrill(configId) {
+    this._stopTimedDrill();
+    const session = new TimedDrillSession(configId);
+    this._timedDrillSession = session;
 
-    this._timedDrillSession.onTick((remaining, solved) => {
-      this._showStatus(`⏱️ ${Math.ceil(remaining)}s — Solved: ${solved}/${this._timedDrillSession.puzzles.length}`);
+    session.onTick((remaining, solved) => {
+      this._showStatus(`⏱️ ${Math.ceil(remaining)}s — Solved: ${solved}/${session.puzzles.length}`);
     });
-
-    this._timedDrillSession.onComplete((result) => {
-      this._puzzleMode = false;
+    session.onComplete((result) => {
+      this._endPuzzleMode();
       this._showDrillResult(result);
     });
 
-    this._timedDrillSession.start();
-    const first = this._timedDrillSession.getCurrentPuzzle();
-    if (first) this.newGame(first.fen);
+    // Load the first position before the clock starts
+    const first = session.getCurrentPuzzle();
+    if (!first) return;
+    await this._loadDrillPuzzle(first);
+    session.start();
+  }
+
+  /**
+   * Show a drill position. Not newGame(): that leaves puzzle mode and could
+   * let the computer move first. The drill session, not the puzzle checker,
+   * judges the answer, so the loaded puzzle only carries the position.
+   */
+  async _loadDrillPuzzle(puzzle) {
+    const session = this._timedDrillSession;
+    await this._loadPuzzle({
+      ...puzzle,
+      title: `${session.config.name} ${session.currentIndex + 1}/${session.puzzles.length}`,
+      description: 'Find the best move!',
+      theme: 'timed drill',
+      _solution: puzzle.solution,
+      _localOnly: true,
+    });
   }
 
   _handleTimedDrillMove(uci) {
-    if (!this._timedDrillSession || !this._timedDrillSession.active) return false;
-    const result = this._timedDrillSession.submitMove(uci);
-    if (result.correct) sounds.playPuzzleCorrect?.();
-    else sounds.playIllegal?.();
+    const session = this._timedDrillSession;
+    if (!session || !session.active) return false;
+    const result = session.submitMove(uci);
+    if (result.correct) {
+      sounds.playPuzzleCorrect?.();
+      this._showPuzzleStatus('✓ Correct!', 'correct');
+    } else {
+      sounds.playPuzzleWrong?.();
+      this._showPuzzleStatus('✗ Not the best move — next puzzle', 'wrong');
+    }
 
     if (!result.finished && result.nextPuzzle) {
-      setTimeout(() => this.newGame(result.nextPuzzle.fen), 500);
+      setTimeout(() => {
+        // The drill may have ended (timeout) or been abandoned meanwhile
+        if (this._timedDrillSession === session && session.active) {
+          this._loadDrillPuzzle(result.nextPuzzle);
+        }
+      }, 500);
     }
     return true;
+  }
+
+  /** End a running drill without a result (a new game or puzzle replaced it). */
+  _stopTimedDrill() {
+    if (!this._timedDrillSession) return;
+    this._timedDrillSession.destroy();
+    this._timedDrillSession = null;
+    this._endPuzzleMode();
+  }
+
+  /** Leave puzzle mode and give back the player's computer-opponent setting. */
+  _endPuzzleMode() {
+    this._puzzleMode = false;
+    this._currentPuzzle = null;
+    if (this._savedUseAI !== undefined) {
+      this.useAI = this._savedUseAI;
+      delete this._savedUseAI;
+    }
   }
 
   _showDrillResult(result) {
