@@ -1136,6 +1136,14 @@ class ChessGame {
     this.board.setHillMarkers(this.variant === 'kingofthehill');
   }
 
+  /** If the side to move is in check, mark its king and play the check sound. */
+  _showCheck() {
+    if (!this.isCheck) return;
+    const king = this.pieces.find((p) => p.piece_type === 'king' && p.color === this.sideToMove);
+    if (king) this.board.highlightCheck(king.square);
+    sounds.playCheck();
+  }
+
   _isPlayerTurn() {
     if (this.playerColor === 'white') return this.sideToMove === 'white';
     return this.sideToMove === 'black';
@@ -1263,15 +1271,7 @@ class ChessGame {
         this.board.setPieces(this.pieces);
         this.board.clearHighlights();
         this.board.highlightLastMove(fromSq, toSq);
-
-        if (this.isCheck) {
-          // Find king square
-          const king = this.pieces.find(
-            (p) => p.piece_type === 'king' && p.color === this.sideToMove
-          );
-          if (king) this.board.highlightCheck(king.square);
-          sounds.playCheck();
-        }
+        this._showCheck();
       }, 220);
 
       this._updateUI();
@@ -1393,6 +1393,7 @@ class ChessGame {
           this.board.setPieces(this.pieces);
           this.board.clearHighlights();
           this.board.highlightLastMove(this.lastMoveFrom, this.lastMoveTo);
+          this._showCheck();
           this._updateUI();
 
           if (this.status !== 'Active') {
@@ -1436,7 +1437,12 @@ class ChessGame {
           const san2 = this._uciToSAN(engineResult.move_uci, prevPieces2, gameData.pieces, gameData.is_check, gameData.status, !!engineResult.captured, prevLegal2);
           this.moveHistory.push(san2);
 
+          this.lastMoveFrom = engineResult.move_uci.substring(0, 2);
+          this.lastMoveTo = engineResult.move_uci.substring(2, 4);
           this.board.setPieces(this.pieces);
+          this.board.clearHighlights();
+          this.board.highlightLastMove(this.lastMoveFrom, this.lastMoveTo);
+          this._showCheck();
           this._updateUI();
           if (this.status !== 'Active') {
             this._showGameOver();
@@ -1554,13 +1560,7 @@ class ChessGame {
       this.board.setPieces(this.pieces);
       this.board.clearHighlights();
       this.board.highlightLastMove(fromSq, toSq);
-      if (this.isCheck) {
-        const king = this.pieces.find(
-          (p) => p.piece_type === 'king' && p.color === this.sideToMove
-        );
-        if (king) this.board.highlightCheck(king.square);
-        sounds.playCheck();
-      }
+      this._showCheck();
     }, 220);
 
     this._updateUI();
@@ -4418,6 +4418,7 @@ class ChessGame {
       this.winner = data.winner ?? null;
       if (this._fenLog[this._fenLog.length - 1] !== data.fen) this._fenLog.push(data.fen);
       this.board.updatePieces(this.pieces);
+      this._showCheck();
       this._updateUI();
     }
   }
