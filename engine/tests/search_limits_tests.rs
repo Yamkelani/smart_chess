@@ -77,3 +77,38 @@ fn timed_search_still_finds_mate_in_one() {
     let (mv, _) = search_best_move_timed(&board, 4, 5000).expect("a move exists");
     assert_eq!(mv.to_uci(), "a1a8", "Ra8# is mate in one");
 }
+
+// ── Multi-move analysis (/analyze) ──
+
+#[test]
+fn analysis_sees_the_recapture() {
+    // Qxd5 wins a knight but loses the queen to exd5.
+    let board = Board::from_fen("4k3/8/4p3/3n4/8/8/8/3QK3 w - - 0 1").unwrap();
+    let top = search_top_moves_timed(&board, 1, 3, 0);
+    assert_ne!(
+        top[0].0.to_uci(),
+        "d1d5",
+        "analysis recommends dropping the queen"
+    );
+}
+
+#[test]
+fn analysis_recognises_mate_in_one() {
+    // Scholar's mate: Qxf7#.
+    let board =
+        Board::from_fen("r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4")
+            .unwrap();
+    let top = search_top_moves_timed(&board, 3, 3, 0);
+    assert_eq!(top[0].0.to_uci(), "h5f7");
+    // Mate scores sit above 18000; the API turns 19000 - score into "mate in".
+    assert_eq!(19000 - top[0].1, 1, "Qxf7# is mate on the first ply");
+}
+
+#[test]
+fn analysis_reports_every_move_it_was_asked_for_under_a_tight_budget() {
+    // A deep request with a short budget must still rank real candidates,
+    // not stop after the first move or two in generation order.
+    let board = Board::new();
+    let top = search_top_moves_timed(&board, 12, 5, 300);
+    assert_eq!(top.len(), 5);
+}
