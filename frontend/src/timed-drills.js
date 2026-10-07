@@ -18,12 +18,10 @@ export const TIMED_DRILL_CONFIGS = [
 const DRILL_PUZZLES = [
   { fen: 'r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', solution: ['h5f7'], rating: 800 },
   { fen: '6k1/5ppp/8/8/8/8/r4PPP/1R4K1 w - - 0 1', solution: ['b1b8'], rating: 900 },
-  { fen: 'r1b1kb1r/ppppqppp/5n2/4N3/2B5/8/PPPP1PPP/RNBQK2R w KQkq - 0 5', solution: ['e5f7'], rating: 1000 },
   { fen: '3r2k1/ppp2ppp/6n1/3q4/3P4/5N2/PP3PPP/R2Q2K1 b - - 0 16', solution: ['d5a2'], rating: 1100 },
   { fen: 'r5k1/5ppp/1q6/8/8/5Q2/5PPP/4R1K1 w - - 0 1', solution: ['e1e8'], rating: 950 },
   { fen: '5rk1/pp2ppbp/6p1/2p5/2P5/1P2B3/P4PPP/3R2K1 w - - 0 20', solution: ['d1d7'], rating: 1100 },
   { fen: 'rnbqkbnr/ppp2ppp/8/3pp3/4P3/3B4/PPPP1PPP/RNBQK1NR w KQkq d6 0 3', solution: ['e4d5'], rating: 800 },
-  { fen: '8/8/4k3/8/4K3/4P3/8/8 w - - 0 1', solution: ['e4d5'], rating: 850 },
   { fen: '5r2/pp2k1pp/8/3Rp3/4P3/1P4P1/P4P1P/6K1 w - - 0 25', solution: ['d5d7'], rating: 1050 },
   { fen: 'r2qk2r/ppp2ppp/2n2n2/3pp1B1/1b2P3/2NP1N2/PPP2PPP/R2QKB1R w KQkq - 0 6', solution: ['g5f6'], rating: 1200 },
   { fen: '2r3k1/pp3pp1/2n4p/3Np3/4P3/1B6/PPP2PPP/3R2K1 w - - 0 17', solution: ['d5e7'], rating: 1300 },
