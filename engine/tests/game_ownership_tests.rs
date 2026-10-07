@@ -260,3 +260,46 @@ async fn a_game_started_from_a_custom_position_is_unrated() {
         assert_eq!(game["is_analysis"], expected, "{body}");
     }
 }
+
+#[actix_web::test]
+async fn only_the_owner_can_read_a_games_full_record() {
+    let app = app!(HashMap::new());
+    let owner = token();
+    let id = new_game!(app, &owner);
+    // Fool's mate, played by the owner for both sides.
+    for uci in ["f2f3", "e7e5", "g2g4", "d8h4"] {
+        assert_eq!(
+            post_status!(
+                app,
+                format!("/game/{id}/move"),
+                Some(&owner),
+                json!({ "uci": uci })
+            ),
+            200
+        );
+    }
+
+    let get = |token: Option<&str>| {
+        let mut req = test::TestRequest::get().uri(&format!("/game/{id}/record"));
+        if let Some(t) = token {
+            req = req.insert_header(bearer(t));
+        }
+        req.to_request()
+    };
+    let resp = test::call_service(&app, get(Some(&owner))).await;
+    assert_eq!(resp.status(), 200);
+    let record: Value = test::read_body_json(resp).await;
+    assert_eq!(record["is_terminal"], true);
+    assert_eq!(record["winner"], "black");
+    assert_eq!(record["is_analysis"], false);
+    assert_eq!(record["variant"], "standard");
+    let fens = record["fen_history"].as_array().unwrap();
+    assert_eq!(fens.len(), 5, "start position plus one per move");
+    assert!(fens[0].as_str().unwrap().starts_with("rnbqkbnr/pppppppp"));
+
+    assert_eq!(
+        test::call_service(&app, get(Some(&token()))).await.status(),
+        403
+    );
+    assert_eq!(test::call_service(&app, get(None)).await.status(), 401);
+}

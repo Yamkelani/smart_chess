@@ -38,6 +38,7 @@ from app.config import (
 from app.model import ChessNetManager
 from app.monitoring import ModelMonitor
 from app.self_play import ReplayBuffer, TrainingExample
+from app.verified_game import position_key
 
 
 @dataclass
@@ -166,80 +167,22 @@ class OnlineLearner:
             if session:
                 session.positions.append(record)
 
-    def complete_game(self, game_id: str, result: str,
-                      winner: str | None = None) -> dict:
-        """
-        Signal that a game has ended. Converts recorded positions to
-        training examples with proper value targets, adds to replay
-        buffer, and triggers a quick training batch.
-
-        Args:
-            game_id: The game identifier
-            result: Game result — "Checkmate", "Stalemate", "Draw", etc.
-
-        Returns:
-            dict with learning stats
-        """
+    def _take_session(self, game_id: str, allowed_positions: frozenset[str] | None = None):
+        """Remove a game's session and return it with the positions to learn
+        from: only those in `allowed_positions` (position keys) when given."""
         with self._lock:
             session = self.sessions.pop(game_id, None)
+        if session is None:
+            return None, []
+        positions = session.positions
+        if allowed_positions is not None:
+            positions = [p for p in positions if position_key(p.fen) in allowed_positions]
+        return session, positions
 
-        if session is None or len(session.positions) == 0:
-            return {"learned": False, "reason": "no positions recorded"}
-
-        session.is_complete = True
-
-        # Determine game value from white's perspective
-        white_value = self._white_value_for(result, winner)
-
-        # Convert positions to training examples
-        examples = []
-        for pos in session.positions:
-            value_target = white_value * pos.side_to_move
-            examples.append(TrainingExample(
-                board_tensor=pos.board_tensor,
-                policy_target=pos.policy_target,
-                value_target=value_target,
-            ))
-
-        # Add to replay buffer
-        from app.self_play import GameRecord
-        record = GameRecord(
-            examples=examples,
-            result=result,
-            num_moves=len(session.positions),
-            duration=time.time() - session.start_time,
-        )
-        self.replay_buffer.add_game(record)
-        self._save_buffer()
-
-        num_positions = len(examples)
-        print(f"[OnlineLearner] game {game_id[:8]} complete: {result}, "
-              f"{num_positions} positions added to buffer "
-              f"(total: {len(self.replay_buffer)})")
-
-        # Train if we have enough data
-        loss_info = self._quick_train()
-
-        self.games_learned += 1
-        self.total_positions_learned += num_positions
-
-        # Record game outcome in monitoring
-        if self.monitor:
-            self.monitor.record_game_outcome(
-                game_id=game_id,
-                result=result,
-                player_color=session.player_color,
-                num_moves=num_positions,
-                generation=self.manager.generation,
-            )
-
-        return {
-            "learned": True,
-            "positions_added": num_positions,
-            "buffer_size": len(self.replay_buffer),
-            "games_learned_total": self.games_learned,
-            "training": loss_info,
-        }
+    def discard_session(self, game_id: str) -> None:
+        """Forget a game that will never be learned from."""
+        with self._lock:
+            self.sessions.pop(game_id, None)
 
     # ---- Training ----
 
@@ -447,7 +390,8 @@ class OnlineLearner:
         return 0.0
 
     def complete_game_with_winner(self, game_id: str, result: str,
-                                  winner: str | None) -> dict:
+                                  winner: str | None,
+                                  allowed_positions: frozenset[str] | None = None) -> dict:
         """
         Complete a game with explicit winner information.
 
@@ -455,11 +399,11 @@ class OnlineLearner:
             game_id: Game ID
             result: Status string (e.g., "Checkmate")
             winner: "white", "black", or None for draw
+            allowed_positions: if given, only recorded positions whose key is in
+                this set are learned (the positions the engine says occurred)
         """
-        with self._lock:
-            session = self.sessions.pop(game_id, None)
-
-        if session is None or len(session.positions) == 0:
+        session, positions = self._take_session(game_id, allowed_positions)
+        if session is None or len(positions) == 0:
             return {"learned": False, "reason": "no positions recorded"}
 
         # Determine white_value from the explicit winner, falling back to the
@@ -467,7 +411,7 @@ class OnlineLearner:
         white_value = self._white_value_for(result, winner)
 
         examples = []
-        for pos in session.positions:
+        for pos in positions:
             value_target = white_value * pos.side_to_move
             examples.append(TrainingExample(
                 board_tensor=pos.board_tensor,
@@ -479,7 +423,7 @@ class OnlineLearner:
         record = GameRecord(
             examples=examples,
             result=result,
-            num_moves=len(session.positions),
+            num_moves=len(positions),
             duration=time.time() - session.start_time,
         )
         self.replay_buffer.add_game(record)

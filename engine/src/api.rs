@@ -207,6 +207,24 @@ pub struct GameStateResponse {
     pub checks: Option<CheckCount>,
 }
 
+/// A game's verified outcome and full history, for its owner. The AI service
+/// reads this (with the player's token) before learning from a game, so it
+/// never has to trust a result or a position the client reports.
+#[derive(Serialize)]
+pub struct GameRecordResponse {
+    pub game_id: String,
+    pub variant: String,
+    pub status: String,
+    /// Winning colour, or null for an unfinished or drawn game.
+    pub winner: Option<String>,
+    /// True once the game can accept no further moves.
+    pub is_terminal: bool,
+    /// True if an arbitrary position was loaded, so the result is unranked.
+    pub is_analysis: bool,
+    /// Every position the game reached, the starting position first.
+    pub fen_history: Vec<String>,
+}
+
 #[derive(Serialize)]
 pub struct MoveResponse {
     pub success: bool,
@@ -534,6 +552,29 @@ pub async fn get_game(data: web::Data<AppState>, path: web::Path<String>) -> imp
             error: "Game not found".to_string(),
         }),
     }
+}
+
+pub async fn game_record(
+    req: HttpRequest,
+    config: web::Data<SessionConfig>,
+    data: web::Data<AppState>,
+    path: web::Path<String>,
+) -> impl Responder {
+    let player_id = try_auth!(caller_id(&req, &config));
+    let game_id = path.into_inner();
+    let mut games = lock_games!(data);
+    ensure_game_loaded(&mut games, &game_id);
+    try_auth!(authorize_owner(&games, &game_id, &player_id));
+    let game = &games[&game_id];
+    HttpResponse::Ok().json(GameRecordResponse {
+        game_id: game.id.clone(),
+        variant: game.variant.id().to_string(),
+        status: format!("{:?}", game.status),
+        winner: game.status.winner().map(str::to_string),
+        is_terminal: game.status.is_terminal(),
+        is_analysis: game.is_analysis,
+        fen_history: game.fen_history.clone(),
+    })
 }
 
 pub async fn make_move(
@@ -1024,6 +1065,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/game/{id}", web::get().to(get_game))
         .route("/game/{id}/move", web::post().to(make_move))
         .route("/game/{id}/moves", web::get().to(get_legal_moves))
+        .route("/game/{id}/record", web::get().to(game_record))
         .route("/game/{id}/set-position", web::post().to(set_position))
         .route("/game/{id}/undo", web::post().to(undo_moves))
         .route("/game/{id}/engine-move", web::post().to(engine_move))

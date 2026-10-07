@@ -634,3 +634,67 @@ class TestConsoleOutput:
                             offenders.append(f"{path.name}:{node.lineno}")
                             break
         assert not offenders, f"non-ASCII text in print(): {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Learning only from engine-verified games
+# ---------------------------------------------------------------------------
+from app.verified_game import LearnedGames, judge, position_key
+
+FOOLS_MATE_FENS = [
+    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "rnbqkbnr/pppppppp/8/8/8/5P2/PPPPP1PP/RNBQKBNR b KQkq - 0 1",
+    "rnbqkbnr/pppp1ppp/8/4p3/8/5P2/PPPPP1PP/RNBQKBNR w KQkq - 0 2",
+    "rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2",
+    "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3",
+]
+
+
+def _record(**overrides):
+    record = {
+        "status": 'Checkmate("black")', "winner": "black", "is_terminal": True,
+        "is_analysis": False, "variant": "standard", "fen_history": FOOLS_MATE_FENS,
+    }
+    record.update(overrides)
+    return record
+
+
+class TestVerifiedLearning:
+    def test_a_finished_standard_game_is_learned_with_the_engines_result(self):
+        v = judge(_record())
+        assert v.learn
+        assert (v.result, v.winner) == ('Checkmate("black")', "black")
+        assert position_key(FOOLS_MATE_FENS[2]) in v.positions
+
+    def test_unfinished_analysis_and_variant_games_are_refused(self):
+        assert not judge(_record(is_terminal=False)).learn
+        assert not judge(_record(is_terminal=False)).permanent  # may finish later
+        analysis = judge(_record(is_analysis=True))
+        assert not analysis.learn and analysis.permanent
+        variant = judge(_record(variant="kingofthehill"))
+        assert not variant.learn and variant.permanent
+
+    def test_positions_match_regardless_of_move_counters(self):
+        fen = FOOLS_MATE_FENS[3]
+        same_position_other_counters = " ".join(fen.split()[:4] + ["7", "40"])
+        assert position_key(same_position_other_counters) in judge(_record()).positions
+
+    def test_learned_games_are_remembered_within_capacity(self):
+        seen = LearnedGames(capacity=2)
+        for gid in ("a", "b", "c"):
+            seen.add(gid)
+        assert "a" not in seen and "b" in seen and "c" in seen
+
+    def test_learner_keeps_only_positions_the_game_reached(self):
+        learner = OnlineLearner.__new__(OnlineLearner)
+        import threading
+        learner._lock = threading.Lock()
+        learner.sessions = {}
+        learner.start_session("g1", "white")
+        for fen in FOOLS_MATE_FENS[:4]:
+            learner.record_position("g1", fen)
+        forged = "8/8/8/8/8/8/QQQQQQQQ/K6k w - - 0 1"
+        learner.record_position("g1", forged)
+        _, kept = learner._take_session("g1", judge(_record()).positions)
+        assert [p.fen for p in kept] == FOOLS_MATE_FENS[:4]
+        assert "g1" not in learner.sessions
