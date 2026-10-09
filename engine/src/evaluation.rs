@@ -867,114 +867,19 @@ pub fn search_best_move_with_rules(
     Some((best_move, best_score))
 }
 
-/// Wall-clock budget for the multi-PV search.
-///
-/// `alpha_beta_with_pv` has no `SearchContext`, so it carries its own small
-/// deadline guard.  A limit of 0 means unlimited, matching `SearchContext`.
-struct PvDeadline {
-    start: Instant,
-    time_limit_ms: u64,
-    nodes: u64,
-    stopped: bool,
-}
-
-impl PvDeadline {
-    fn new(time_limit_ms: u64) -> Self {
-        Self {
-            start: Instant::now(),
-            time_limit_ms,
-            nodes: 0,
-            stopped: false,
-        }
-    }
-
-    /// Check the clock every 2048 nodes, as the main search does.
-    #[inline]
-    fn check_time(&mut self) {
-        if self.time_limit_ms == 0 {
-            return;
-        }
-        self.nodes += 1;
-        if self.nodes & 2047 == 0 && self.start.elapsed().as_millis() as u64 >= self.time_limit_ms {
-            self.stopped = true;
-        }
-    }
-}
-
-/// Multi-PV search: return the top N moves with their evaluations and principal variations.
-/// Search a position with alpha-beta while also returning the principal variation.
-fn alpha_beta_with_pv(
-    board: &Board,
-    depth: u8,
-    mut alpha: i32,
-    beta: i32,
-    max_pv_len: usize,
-    limit: &mut PvDeadline,
-) -> (i32, Vec<crate::moves::Move>) {
-    use crate::moves::{generate_legal_moves, make_move, Move};
-
-    limit.check_time();
-    if depth == 0 || max_pv_len == 0 || limit.stopped {
-        return (evaluate(board), Vec::new());
-    }
-
-    let moves = generate_legal_moves(board);
-    if moves.is_empty() {
-        return (evaluate(board), Vec::new());
-    }
-
-    let mut best_score = i32::MIN + 1;
-    let mut best_pv: Vec<Move> = Vec::new();
-
-    for mv in &moves {
-        let mut new_board = board.clone();
-        if make_move(&mut new_board, mv) {
-            let (child_score, child_pv) = alpha_beta_with_pv(
-                &new_board,
-                depth.saturating_sub(1),
-                -beta,
-                -alpha,
-                max_pv_len.saturating_sub(1),
-                limit,
-            );
-            let score = -child_score;
-
-            if limit.stopped {
-                // Out of time: keep whatever this node already established.
-                if best_pv.is_empty() {
-                    best_score = score;
-                    best_pv.push(*mv);
-                    best_pv.extend(child_pv);
-                }
-                break;
-            }
-
-            if score > best_score {
-                best_score = score;
-                best_pv.clear();
-                best_pv.push(*mv);
-                best_pv.extend(child_pv);
-            }
-
-            if score > alpha {
-                alpha = score;
-            }
-            if alpha >= beta {
-                break;
-            }
-        }
-    }
-
-    (best_score, best_pv)
-}
+/// Longest principal variation reported per move, the move itself included.
+const PV_MAX_LEN: usize = 8;
 
 /// Multi-PV search with an explicit wall-clock budget.
 ///
-/// Each result is (move, score, pv) where pv shows the expected continuation.
+/// Each result is (move, score, pv), best first. Every legal move is scored by
+/// the main search (quiescence, mate scores, move ordering, transposition
+/// table) through iterative deepening, and the deepest iteration that scored
+/// every move is reported. Mate scores are 19000 minus the plies to mate
+/// (negative when being mated), so callers can derive "mate in N".
+///
 /// `time_limit_ms` of 0 means unlimited; every caller that serves a request
 /// should pass a real budget, since this scores *every* legal move.
-/// On timeout the moves scored so far are returned, so callers always receive a
-/// usable (if shorter) list.
 pub fn search_top_moves_timed(
     board: &Board,
     depth: u8,
@@ -982,43 +887,98 @@ pub fn search_top_moves_timed(
     time_limit_ms: u64,
 ) -> Vec<(crate::moves::Move, i32, Vec<crate::moves::Move>)> {
     use crate::moves::{generate_legal_moves, make_move, Move};
+    const INF: i32 = i32::MAX - 1;
 
-    let moves = generate_legal_moves(board);
-    if moves.is_empty() {
+    let mut roots: Vec<Move> = generate_legal_moves(board);
+    if roots.is_empty() {
         return vec![];
     }
 
-    let mut limit = PvDeadline::new(time_limit_ms);
-
-    // Score every legal move and capture its principal variation in the same search.
-    let mut scored: Vec<(Move, i32, Vec<Move>)> = Vec::new();
-    for mv in &moves {
-        let mut new_board = board.clone();
-        if make_move(&mut new_board, mv) {
-            let (child_score, child_pv) = alpha_beta_with_pv(
-                &new_board,
-                depth.saturating_sub(1),
-                i32::MIN + 1,
-                i32::MAX - 1,
-                7,
-                &mut limit,
-            );
-            let score = -child_score;
-            let mut pv = vec![*mv];
-            pv.extend(child_pv);
-            scored.push((*mv, score, pv));
+    let mut ctx = SearchContext::new(time_limit_ms, SearchRules::default());
+    let mut best: Vec<(Move, i32)> = Vec::new();
+    let mut best_depth = 1u8;
+    for d in 1..=depth.max(1) {
+        ctx.clear_killers();
+        let mut scored = Vec::with_capacity(roots.len());
+        for mv in &roots {
+            let mut child = board.clone();
+            if !make_move(&mut child, mv) {
+                continue;
+            }
+            // A full window: every move needs an exact score, not just a bound.
+            let score = -alpha_beta(&child, d - 1, -INF, INF, &mut ctx);
+            if ctx.stopped {
+                break;
+            }
+            scored.push((*mv, score));
         }
-        if limit.stopped {
-            // Out of time.  Scores for the remaining root moves would be
-            // unsearched guesses, so report only what was actually examined.
+        if ctx.stopped {
+            // Keep the last iteration that scored every move. If even the
+            // first did not finish, report the moves it did score.
+            if best.is_empty() {
+                best = scored;
+                best_depth = d;
+            }
             break;
         }
+        scored.sort_by_key(|s| std::cmp::Reverse(s.1));
+        // Search the best moves first next time, as the main search does.
+        roots = scored.iter().map(|s| s.0).collect();
+        best = scored;
+        best_depth = d;
     }
 
-    // Sort descending by score
-    scored.sort_by_key(|s| std::cmp::Reverse(s.1));
-    scored.truncate(num_moves);
-    scored
+    best.sort_by_key(|s| std::cmp::Reverse(s.1));
+    best.truncate(num_moves);
+    best.into_iter()
+        .map(|(mv, score)| {
+            let mut child = board.clone();
+            make_move(&mut child, &mv);
+            let mut pv = vec![mv];
+            pv.extend(principal_variation(&ctx, &child, PV_MAX_LEN - 1));
+            (mv, mate_score_in_plies(score, best_depth), pv)
+        })
+        .collect()
+}
+
+/// Convert a root move's mate score from the search's convention (19000 plus
+/// the depth still remaining where the mate was found, searched to
+/// `root_depth`) to 19000 minus the plies from the root to the mate.
+fn mate_score_in_plies(score: i32, root_depth: u8) -> i32 {
+    if score.abs() <= 18000 {
+        return score;
+    }
+    let remaining = score.abs() - 19000;
+    let plies = (root_depth as i32 - remaining).max(1);
+    score.signum() * (19000 - plies)
+}
+
+/// The expected continuation from `board`, read from the transposition table.
+fn principal_variation(
+    ctx: &SearchContext,
+    board: &Board,
+    max_len: usize,
+) -> Vec<crate::moves::Move> {
+    use crate::moves::{generate_legal_moves, make_move};
+
+    let mut pv = Vec::new();
+    let mut pos = board.clone();
+    let mut seen = std::collections::HashSet::new();
+    while pv.len() < max_len {
+        let hash = ctx.node_hash(&pos);
+        if !seen.insert(hash) {
+            break; // a repetition would loop forever
+        }
+        let Some(mv) = tt_probe(ctx, hash).and_then(|e| e.best_move) else {
+            break;
+        };
+        // Table entries can collide, so only follow a move that is legal here.
+        if !generate_legal_moves(&pos).contains(&mv) || !make_move(&mut pos, &mv) {
+            break;
+        }
+        pv.push(mv);
+    }
+    pv
 }
 
 // ═══════════════════════════════════════════════════════════════════════
