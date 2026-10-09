@@ -45,6 +45,7 @@ from app.config import (
 )
 from app.mcts import MCTS
 from app.model import ChessNetManager
+from app.verified_game import LearnedGames, judge
 
 # ---- Pydantic Models ----
 
@@ -65,11 +66,10 @@ class AIMoveResponse(BaseModel):
 
 class GameCompleteRequest(BaseModel):
     game_id: str
-    result: str
+    # The client's own view of the outcome. Accepted so existing clients keep
+    # working, but never used: the result is read from the engine instead.
+    result: str = ""
     player_color: str = "white"
-    # Structured outcome. Optional so existing clients keep working, but callers
-    # should send it: deriving the winner from `result` means parsing a display
-    # string, which is how every decisive game came to be labelled a draw.
     winner: str | None = None
 
 class EvalRequest(BaseModel):
@@ -116,6 +116,7 @@ class HealthResponse(BaseModel):
 manager: ChessNetManager | None = None
 http_client: httpx.AsyncClient | None = None
 online_learner = None  # OnlineLearner instance
+learned_games = LearnedGames()  # games already learned, so none counts twice
 model_monitor = None   # ModelMonitor instance
 
 
@@ -486,20 +487,50 @@ async def ai_move(req: AIMoveRequest):
 
 
 @app.post("/ai/game-complete")
-async def game_complete(req: GameCompleteRequest):
-    """Signal that a game has ended so the AI can learn from it."""
+async def game_complete(req: GameCompleteRequest, authorization: str | None = Header(default=None)):
+    """Signal that a game has ended so the AI can learn from it.
+
+    Nothing the client reports is trusted. The game's record is fetched from
+    the engine with the player's own session token, which proves they own it;
+    the AI learns only from a finished standard game it has not learned
+    before, only from positions that game really reached, and with the
+    engine's result.
+    """
     if not online_learner:
         return {"learned": False, "reason": "online learner not initialized"}
+    if not authorization:
+        return {"learned": False, "reason": "session token required"}
+    if req.game_id in learned_games:
+        return {"learned": False, "reason": "game already learned"}
+    if http_client is None:
+        return {"learned": False, "reason": "engine unavailable"}
     try:
-        result = online_learner.complete_game(req.game_id, req.result, req.winner)
-        logger.info(
-            "[game-complete] game=%s result=%s winner=%s learned=%s",
-            req.game_id[:8], req.result, req.winner, result.get("learned"),
+        resp = await http_client.get(f"/game/{req.game_id}/record", headers=_auth_headers(authorization))
+    except httpx.HTTPError as e:
+        logger.warning("[game-complete] engine unavailable: %s", e)
+        return {"learned": False, "reason": "engine unavailable"}
+    if resp.status_code != 200:
+        return {"learned": False, "reason": f"engine refused the game ({resp.status_code})"}
+
+    verdict = judge(resp.json())
+    if not verdict.learn:
+        if verdict.permanent:
+            online_learner.discard_session(req.game_id)
+        return {"learned": False, "reason": verdict.reason}
+    try:
+        result = online_learner.complete_game_with_winner(
+            req.game_id, verdict.result, verdict.winner, verdict.positions
         )
-        return result
     except Exception as e:
         logger.exception("[game-complete] error")
         return {"learned": False, "error": str(e)}
+    if result.get("learned"):
+        learned_games.add(req.game_id)
+    logger.info(
+        "[game-complete] game=%s result=%s winner=%s learned=%s",
+        req.game_id[:8], verdict.result, verdict.winner, result.get("learned"),
+    )
+    return result
 
 
 @app.post("/ai/evaluate", response_model=EvalResponse)
