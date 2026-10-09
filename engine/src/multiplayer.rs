@@ -177,13 +177,6 @@ pub struct RoomMoveRequest {
     pub uci: String,
 }
 
-#[derive(Deserialize)]
-pub struct UpdateLeaderboardRequest {
-    pub player_id: String,
-    pub player_name: String,
-    pub result: String, // "win" | "loss" | "draw"
-}
-
 #[derive(Serialize)]
 pub struct RoomResponse {
     pub room_id: String,
@@ -227,8 +220,8 @@ const INITIAL_RATING: i32 = 1200;
 /// Elo K-factor for leaderboard updates.
 const RATING_K: i32 = 24;
 
-/// Cap on stored leaderboard entries. Entries are created by unauthenticated
-/// callers, so without a cap the map is an unbounded memory sink.
+/// Cap on stored leaderboard entries. Entries are created by guest sessions,
+/// which are free to obtain, so without a cap the list is an unbounded memory sink.
 const MAX_LEADERBOARD_ENTRIES: usize = 10_000;
 
 /// Longest accepted display name.
@@ -242,21 +235,6 @@ const MAX_EMOTE_LEN: usize = 32;
 
 /// Messages kept per room. Rooms live in memory, so chat must be bounded.
 const MAX_CHAT_MESSAGES: usize = 200;
-
-/// Whether leaderboard writes are accepted.
-///
-/// Off by default: the endpoint attributes a result to a caller-supplied
-/// player_id, and with no authenticated identity any caller can submit results
-/// as anybody. Enable with ENABLE_LEADERBOARD_WRITES=1 only where that is
-/// acceptable (a trusted network, or once identity is authenticated).
-fn leaderboard_writes_enabled() -> bool {
-    matches!(
-        std::env::var("ENABLE_LEADERBOARD_WRITES")
-            .unwrap_or_default()
-            .as_str(),
-        "1" | "true" | "TRUE" | "yes"
-    )
-}
 
 /// Trim a client-supplied display name to something safe to store.
 ///
@@ -660,9 +638,13 @@ pub async fn room_move(
         Ok(result) => {
             room.last_activity = now_epoch();
 
-            // Check if game is over
+            // Check if game is over. This is the only place a room game
+            // finishes, so its result is recorded exactly once.
             if game.status != GameStatus::Active {
                 room.status = RoomStatus::Finished;
+                if room.game_variant() == crate::variants::GameVariant::Standard {
+                    record_room_result(&mp_state, room, game.status.winner());
+                }
             }
 
             HttpResponse::Ok().json(serde_json::json!({
@@ -856,89 +838,87 @@ pub async fn get_leaderboard(mp_state: web::Data<MultiplayerState>) -> impl Resp
     HttpResponse::Ok().json(sorted)
 }
 
-pub async fn update_leaderboard(
-    mp_state: web::Data<MultiplayerState>,
-    body: web::Json<UpdateLeaderboardRequest>,
-) -> impl Responder {
-    if !leaderboard_writes_enabled() {
-        return HttpResponse::Forbidden().json(serde_json::json!({
-            "error": "Leaderboard writes are disabled",
-            "reason": "Results are attributed to a caller-supplied player id, which cannot be trusted without authentication."
-        }));
-    }
-
-    let delta = match body.result.as_str() {
-        "win" => 1.0_f64,
-        "draw" => 0.5_f64,
-        "loss" => 0.0_f64,
-        other => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "error": format!("result must be 'win', 'loss' or 'draw', got '{}'", other)
-            }))
-        }
+/// Rate a finished room game for both seated players.
+///
+/// Called by the engine when it sees the game end, never from a client
+/// report. Ratings follow Elo between the two players; variant games are not
+/// rated (the rating measures standard chess).
+fn record_room_result(mp_state: &MultiplayerState, room: &MultiplayerRoom, winner: Option<&str>) {
+    let (Some(guest_id), Some(guest_name)) = (&room.guest_id, &room.guest_name) else {
+        return;
+    };
+    let host = (room.host_id.as_str(), room.host_name.as_str());
+    let guest = (guest_id.as_str(), guest_name.as_str());
+    let (white, black) = if room.host_color == "white" {
+        (host, guest)
+    } else {
+        (guest, host)
+    };
+    // White's score: 1 for a win, 0.5 for a draw, 0 for a loss.
+    let white_score = match winner {
+        Some("white") => 1.0,
+        Some("black") => 0.0,
+        _ => 0.5,
     };
 
-    let name = sanitise_name(&body.player_name);
     let mut lb = match mp_state.leaderboard.lock() {
         Ok(g) => g,
         Err(_) => {
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": "Internal lock error"
-            }))
+            log::error!("Leaderboard lock poisoned; result not recorded");
+            return;
         }
     };
+    let new_players = [white.0, black.0]
+        .iter()
+        .filter(|id| !lb.iter().any(|e| e.player_id == **id))
+        .count();
+    if lb.len() + new_players > MAX_LEADERBOARD_ENTRIES {
+        log::warn!("Leaderboard is full; result not recorded");
+        return;
+    }
 
-    let entry = lb.iter_mut().find(|e| e.player_id == body.player_id);
-    let new_rating = match entry {
-        Some(e) => {
-            e.player_name = name;
-            match body.result.as_str() {
-                "win" => e.wins += 1,
-                "loss" => e.losses += 1,
-                _ => e.draws += 1,
-            }
-            e.games_played += 1;
-            e.last_active = now_epoch();
-            // Rating is derived here, never taken from the request. Expected
-            // score is against a nominal average opponent, since this endpoint
-            // does not know who was played.
-            let expected = 1.0 / (1.0 + 10f64.powf((INITIAL_RATING - e.rating) as f64 / 400.0));
-            e.rating += (RATING_K as f64 * (delta - expected)).round() as i32;
-            e.rating = e.rating.clamp(100, 4000);
-            e.rating
-        }
-        None => {
-            if lb.len() >= MAX_LEADERBOARD_ENTRIES {
-                return HttpResponse::TooManyRequests().json(serde_json::json!({
-                    "error": "Leaderboard is full"
-                }));
-            }
-            let mut entry = LeaderboardEntry {
-                player_id: body.player_id.clone(),
-                player_name: name,
-                rating: INITIAL_RATING,
-                wins: 0,
-                losses: 0,
-                draws: 0,
-                games_played: 1,
-                last_active: now_epoch(),
-            };
-            match body.result.as_str() {
-                "win" => entry.wins = 1,
-                "loss" => entry.losses = 1,
-                _ => entry.draws = 1,
-            }
-            entry.rating += (RATING_K as f64 * (delta - 0.5)).round() as i32;
-            let rating = entry.rating;
-            lb.push(entry);
-            rating
-        }
+    let now = now_epoch();
+    let rating_of = |lb: &Vec<LeaderboardEntry>, id: &str| {
+        lb.iter()
+            .find(|e| e.player_id == id)
+            .map_or(INITIAL_RATING, |e| e.rating)
     };
-
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "updated",
-        "rating": new_rating
-    }))
+    let (white_rating, black_rating) = (rating_of(&lb, white.0), rating_of(&lb, black.0));
+    for ((id, name), rating, opponent, score) in [
+        (white, white_rating, black_rating, white_score),
+        (black, black_rating, white_rating, 1.0 - white_score),
+    ] {
+        let expected = 1.0 / (1.0 + 10f64.powf((opponent - rating) as f64 / 400.0));
+        let new_rating =
+            (rating + (RATING_K as f64 * (score - expected)).round() as i32).clamp(100, 4000);
+        let entry = match lb.iter().position(|e| e.player_id == id) {
+            Some(i) => &mut lb[i],
+            None => {
+                lb.push(LeaderboardEntry {
+                    player_id: id.to_string(),
+                    player_name: name.to_string(),
+                    rating: INITIAL_RATING,
+                    wins: 0,
+                    losses: 0,
+                    draws: 0,
+                    games_played: 0,
+                    last_active: now,
+                });
+                lb.last_mut().expect("just pushed")
+            }
+        };
+        entry.player_name = name.to_string();
+        entry.rating = new_rating;
+        entry.games_played += 1;
+        entry.last_active = now;
+        if score == 1.0 {
+            entry.wins += 1;
+        } else if score == 0.0 {
+            entry.losses += 1;
+        } else {
+            entry.draws += 1;
+        }
+    }
 }
 
 // ── Tournament System ──
@@ -1011,6 +991,5 @@ pub fn configure_multiplayer_routes(cfg: &mut web::ServiceConfig) {
             web::post().to(request_rematch),
         )
         .route("/multiplayer/room/{id}/leave", web::post().to(leave_room))
-        .route("/leaderboard", web::get().to(get_leaderboard))
-        .route("/leaderboard/update", web::post().to(update_leaderboard));
+        .route("/leaderboard", web::get().to(get_leaderboard));
 }
